@@ -8,8 +8,10 @@ the surprises in this module.
 - AMD Radeon Pro 455 — `0000:01:00.0`, and **all external DisplayPort outputs
   hang off it**
 
-Current state: mux on the **AMD GPU**, panel on `card1-eDP-1` at 2880x1800,
-i915 runtime-suspended.
+Current state (2026-09-08): mux on the **Intel iGPU**, panel on `card1-eDP-1`
+at 2880x1800, and the **AMD card switched off entirely** (D3cold) — worth
+5.75 W. See §4.4. Card numbering flips with the mux: with the panel on Intel,
+`card0` is amdgpu and `card1` is i915.
 
 ---
 
@@ -118,14 +120,8 @@ power-on.
 `/usr/local/sbin/gpu-mode` (`igpu` / `dgpu` / `status`) writes it;
 `/usr/local/sbin/gpu-switch` is the lower-level writer.
 
-**Current state: NVRAM was reset, so the firmware default (AMD) applies.**
-`gpu-mode status` reports `EFI selection : unknown (unreadable)` for that reason
-— the variable is absent, not broken.
-
-Running on the iGPU is possible and was demonstrated working, but it is **not
-recommended** — external DisplayPort outputs stop working entirely, and it
-measured *worse* for power. See [10-dead-ends.md](10-dead-ends.md) §10.2 and
-[06-power-and-battery.md](06-power-and-battery.md).
+**Current state (2026-09-08): panel on the Intel iGPU, AMD card powered off.**
+This is the low-power configuration and it is worth **5.75 W**. See §4.4.
 
 > **Recovery if a mux change ever leaves a black screen:** hold
 > **⌘ + ⌥ + P + R** at the boot chime through two more chimes. That resets NVRAM
@@ -133,11 +129,101 @@ measured *worse* for power. See [10-dead-ends.md](10-dead-ends.md) §10.2 and
 
 ---
 
+## 4.4 Powering the AMD card off — the single biggest power win
+
+### Why it is necessary at all
+
+```
+amdgpu 0000:01:00.0: Runtime PM not available
+```
+
+Polaris 11 in a gmux Mac has **no ATPX and no `_PR3`**, so amdgpu declines
+runtime PM outright — `runtime_usage`, `runtime_enabled` and
+`autosuspend_delay_ms` do not even exist under `power/` for this device. An
+idle, 0 %-busy, completely unheld card still sits in **D0** and costs ~2 W
+forever. Setting `power/control=auto` achieves nothing. `vga_switcheroo` is the
+only lever that actually cuts power.
+
+### Measured, idle desktop, backlight 74 %, on battery
+
+| Configuration | Draw | dGPU state |
+|---|---|---|
+| AMD drives panel, `dpm=low` | 19.04 W | D0, awake — the old baseline |
+| Intel drives panel, AMD awake | 21.23 W | D0 — **worse**, see below |
+| Intel drives panel, **AMD off** | 15.25 W | D3hot |
+| … same, after one suspend cycle | **13.29 W** | **D3cold** |
+
+**−5.75 W, −30 %.** Note the middle row: moving the panel to the iGPU *on its
+own is a net loss* of 2.2 W, because you then pay for two powered GPUs instead
+of one. The saving exists only when the AMD card is actually switched off. That
+is why this looked like a dead end for a day.
+
+The last row is not a typo — the card settles from D3hot into **D3cold** across
+a suspend/resume, which is worth a further ~2 W. It does not reach D3cold
+without that cycle.
+
+### How it is wired up
+
+| Piece | What it does |
+|---|---|
+| `gpu-power-prefs` EFI var | firmware points the mux at the iGPU at power-on |
+| `~/.config/uwsm/env-hyprland` | pins `AQ_DRM_DEVICES` to the Intel node, so nothing opens the AMD card (§9.1) |
+| `/usr/local/sbin/dgpu-power` | guarded `off` / `on` / `status` |
+| `dgpu-off.service` (**user** unit, enabled) | runs `dgpu-power off` 8 s after `graphical-session.target`; `ExecStop` turns the card back **on** at logout/shutdown |
+
+### ⚠️ Why the naked `echo OFF` is still wrong
+
+The upstream MacBookPro13,3 guide ships this and nothing else:
+
+```
+ExecStart=/bin/sh -c 'echo OFF > /sys/kernel/debug/vgaswitcheroo/switch'
+```
+
+That exact write wedged this machine on 2026-09-07 — amdgpu went into an
+uninterruptible kernel wait, every later read of the switch file blocked, and it
+took a power cycle. **The cause was a missing precondition, not bad luck:**
+Hyprland and Xwayland still had the AMD card open, and `vga_switcheroo` cannot
+power off a client holding live file descriptors. The `AQ_DRM_DEVICES` pinning
+that frees the card was written 14 minutes *after* that crash.
+
+`dgpu-power` therefore refuses unless all of these hold:
+
+1. the panel is on `i915` — otherwise the write blanks your screen;
+2. **zero** processes hold the AMD card *or its render node* (a compositor holds
+   the render node, so checking `/dev/dri/cardN` alone is not enough);
+3. a **circuit breaker** file at `/var/lib/dgpu-power/attempt-incomplete` is
+   absent. It is written immediately before the switch and removed immediately
+   after, so if the write ever wedges the kernel again the marker survives the
+   power cycle and every later attempt refuses. An auto-started unit can never
+   turn one hang into a boot loop. Clear it by hand with
+   `sudo rm /var/lib/dgpu-power/attempt-incomplete` once you know why it tripped.
+
+`systemctl enable` on the system unit is impossible by construction — 
+`/etc/systemd/system/disable-dgpu.service` has **no `[Install]` section**,
+because running this at boot is what the guide warns hangs the machine (sddm
+holds both cards while the greeter runs). The user unit is bound to
+`graphical-session.target` instead, which is the guide's "after first login".
+
+### What it costs you
+
+- **External displays stop working entirely.** Every external DisplayPort output
+  hangs off the AMD card. Docking requires `sudo gpu-mode dgpu` **and a reboot**.
+- Writes to the AMD card's sysfs fail with `EBUSY` while it is off. TLP does
+  exactly this on every AC↔battery transition; it was tested deliberately and
+  returns `rc=1` in under 2 s with no kernel complaint. Harmless.
+- Suspend/resume was tested with the card off: it resumes fine, screen returns,
+  card stays off. The Thunderbolt `tb_cfg_read: -108` warnings on resume are
+  **pre-existing** (30 per resume on earlier boots too) and unrelated — see
+  [05-sleep-and-resume.md](05-sleep-and-resume.md).
+
+---
+
 ## Verify
 
 ```bash
 hyprctl monitors | grep -A2 eDP-1                      # 2880x1800
-for c in /sys/class/drm/card*-eDP-*; do echo "$c $(cat $c/status)"; done
-sudo cat /sys/kernel/debug/dri/1/DP-3/link_settings 2>/dev/null
-sudo gpu-mode status
+sudo gpu-mode status                                   # panel is on : i915
+sudo dgpu-power status                                 # 1:DIS: :Off:  D-state=D3cold
+systemctl --user is-enabled dgpu-off.service           # enabled
+grep -c . /dev/null; echo $AQ_DRM_DEVICES              # the Intel card node
 ```

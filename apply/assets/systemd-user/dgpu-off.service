@@ -1,0 +1,29 @@
+[Unit]
+Description=Power off the discrete AMD GPU once the graphical session exists
+Documentation=file:///usr/local/sbin/dgpu-power
+# Deliberately a USER unit bound to the graphical session, NOT a system unit.
+# The MacBookPro13,3 guide warns that doing this at boot hangs the machine, and
+# it is right: sddm holds both DRM cards while the greeter runs, and
+# vga_switcheroo cannot power off a client that has open file descriptors.
+# By the time graphical-session.target is up, Hyprland is pinned to the Intel
+# node by ~/.config/uwsm/env-hyprland and the AMD card has no holders at all.
+# dgpu-power re-checks that itself and refuses if anything still holds it.
+#
+# No ConditionPathExists= on the switch file: /sys/kernel/debug is mode 0700, so
+# the USER manager cannot stat inside it and the condition would always fail.
+# dgpu-power performs that check itself, as root, under sudo.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Let the session settle so any transient holder has released the card.
+ExecStartPre=/usr/bin/sleep 8
+ExecStart=/usr/bin/sudo -n /usr/local/sbin/dgpu-power off
+# Bring the card back when the session ends, so shutdown does not stall - the
+# upstream guide reports shutdowns hanging with the dGPU left off.
+ExecStop=/usr/bin/sudo -n /usr/local/sbin/dgpu-power on
+
+[Install]
+WantedBy=graphical-session.target

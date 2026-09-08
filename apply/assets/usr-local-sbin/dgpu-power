@@ -1,0 +1,102 @@
+#!/bin/bash
+# Power the discrete Radeon Pro 455 off/on via vga_switcheroo (MacBookPro13,3).
+#
+#   off      cut power to the AMD card
+#   on       restore it
+#   status   report
+#
+# Measured at the battery terminals, idle desktop, backlight 74%:
+#   AMD drives panel, dpm=low          19.04 W   (the old baseline)
+#   Intel drives panel, AMD awake      21.23 W   (worse - AMD cannot sleep)
+#   Intel drives panel, AMD off        15.25 W   D3hot
+#   ... same, after one suspend cycle  13.29 W   D3cold   -5.75 W / -30%
+#
+# Polaris 11 in a gmux Mac has NO ATPX and NO _PR3, so amdgpu logs
+# "Runtime PM not available" and the card can never runtime-suspend on its own.
+# An idle, 0%-busy, completely unused card still sits in D0 and costs ~2 W.
+# vga_switcheroo is the only lever that actually powers it down.
+#
+# WHY THE GUARDS EXIST. A naked `echo OFF > .../switch` wedged this machine on
+# 2026-09-07: amdgpu went into an uninterruptible kernel wait, the switch file
+# blocked on every subsequent read, and the box had to be power-cycled. The
+# cause was that Hyprland and Xwayland still had the AMD card open - the
+# AQ_DRM_DEVICES pinning that frees it did not exist yet. vga_switcheroo cannot
+# power off a client that has live file descriptors, so NEVER call this without
+# checking, and never run it at boot (sddm holds both cards while it runs).
+set -uo pipefail
+
+SWITCH=/sys/kernel/debug/vgaswitcheroo/switch
+MARKER=/var/lib/dgpu-power/attempt-incomplete
+
+die() { echo "dgpu-power: $*" >&2; exit 1; }
+
+amd_card() {
+	local c
+	for c in /sys/class/drm/card[0-9]; do
+		[ -e "$c/device/driver" ] || continue
+		[ "$(basename "$(readlink -f "$c/device/driver")")" = amdgpu ] && { basename "$c"; return 0; }
+	done
+	return 1
+}
+
+# The card wired to the panel is the one whose eDP connector has real modes -
+# NOT the one whose status says "connected". The card without the panel still
+# advertises a phantom eDP that reports connected with zero modes.
+panel_driver() {
+	local c
+	for c in /sys/class/drm/card[0-9]-eDP-*; do
+		[ -n "$(cat "$c/modes" 2>/dev/null)" ] || continue
+		basename "$(readlink -f "${c%%-eDP-*}/device/driver")"
+		return 0
+	done
+	return 1
+}
+
+holders() {
+	local card="$1" nodes r n
+	# The card node plus its render node - a compositor typically holds the
+	# render node, not the card, so checking only /dev/dri/cardN misses it.
+	nodes="/dev/dri/$card"
+	for r in /sys/class/drm/"$card"/device/drm/renderD*; do
+		[ -e "$r" ] && nodes="$nodes /dev/dri/$(basename "$r")"
+	done
+	n=$(fuser $nodes 2>/dev/null | wc -w)
+	echo "${n:-0}"
+}
+
+case "${1:-status}" in
+off)
+	[ -e "$SWITCH" ] || die "no vga_switcheroo (debugfs not mounted?)"
+	CARD=$(amd_card) || die "no amdgpu card found - already off, or driver not loaded"
+	PANEL=$(panel_driver) || die "cannot determine which GPU drives the panel"
+	[ "$PANEL" = i915 ] || die "panel is on $PANEL, not i915 - powering off the AMD card would blank the screen. Run 'gpu-mode igpu' and reboot first."
+	H=$(holders "$CARD")
+	[ "$H" -eq 0 ] || die "$H process(es) still hold $CARD - powering off now is what wedged the machine on 2026-09-07. Check AQ_DRM_DEVICES is pinned to the Intel node."
+	grep -q ':Off:' <<<"$(cat "$SWITCH")" && { echo "already off"; exit 0; }
+	# Circuit breaker. The marker is written immediately before the switch and
+	# removed immediately after. If the write ever wedges the kernel the marker
+	# survives the power-cycle and every later attempt refuses - so the
+	# auto-started unit can never turn one hang into a boot loop.
+	[ -e "$MARKER" ] && die "previous attempt did not complete ($(cat "$MARKER" 2>/dev/null)). Refusing. If that was a one-off, clear it: sudo rm $MARKER"
+	mkdir -p "$(dirname "$MARKER")"
+	date -Is > "$MARKER"
+	echo OFF > "$SWITCH" || { rm -f "$MARKER"; die "write failed"; }
+	rm -f "$MARKER"
+	sleep 1
+	echo "dGPU off: $(grep DIS: "$SWITCH" | head -1)  D-state=$(cat /sys/bus/pci/devices/0000:01:00.0/power_state)"
+	;;
+on)
+	[ -e "$SWITCH" ] || die "no vga_switcheroo"
+	echo ON > "$SWITCH" || die "write failed"
+	sleep 1
+	echo "dGPU on: $(grep DIS: "$SWITCH" | head -1)"
+	;;
+status)
+	[ -e "$SWITCH" ] && cat "$SWITCH" || echo "no vga_switcheroo"
+	echo "panel on : $(panel_driver 2>/dev/null || echo unknown)"
+	echo "D-state  : $(cat /sys/bus/pci/devices/0000:01:00.0/power_state 2>/dev/null)"
+	[ -e "$MARKER" ] && echo "BREAKER  : TRIPPED ($(cat "$MARKER")) - 'off' will refuse until you rm $MARKER"
+	:
+	;;
+*) echo "usage: dgpu-power [off|on|status]" >&2; exit 1 ;;
+esac

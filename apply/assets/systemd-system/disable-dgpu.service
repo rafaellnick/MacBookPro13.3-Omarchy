@@ -1,0 +1,18 @@
+[Unit]
+Description=Power off the discrete AMD GPU via vga_switcheroo (MacBookPro13,3)
+Documentation=file:///usr/local/sbin/dgpu-power
+ConditionPathExists=/sys/kernel/debug/vgaswitcheroo/switch
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/dgpu-power off
+# Restore the card before shutdown. The upstream guide reports shutdowns
+# hanging or taking minutes with the dGPU left off; bringing it back first
+# avoids that entirely.
+ExecStop=/usr/local/sbin/dgpu-power on
+
+# NO [Install] SECTION, DELIBERATELY. `systemctl enable` must fail. Running
+# this at boot is what the MacBookPro13,3 guide warns hangs the machine: sddm
+# holds both DRM cards while the greeter runs, and vga_switcheroo cannot power
+# off a client with open file descriptors. Start it after you are logged in.

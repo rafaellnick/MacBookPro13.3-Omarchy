@@ -11,12 +11,12 @@ sudo ./mbp133-apply.sh          # apply everything except the bootloader
 ## Design
 
 **Assets are exact copies, not retyped.** `assets/` holds byte-for-byte copies
-of the 27 files taken from the working machine. The script installs those. This
+of the 31 files taken from the working machine. The script installs those. This
 avoids transcription drift between what is documented, what is installed, and
 what actually works.
 
 **Idempotent.** Every item is compared before writing. A second run on a correct
-machine reports `0 applied, 44 already correct, 0 warnings, 0 failed`.
+machine reports `0 applied, 51 already correct, 0 warnings, 0 failed`.
 
 **Phase-scoped.** `--phase touchbar` (or `wifi`, `sleep`, `power`, `shell`,
 `maintenance`, `packages`, `audio-dkms`) applies one area. Phase names match the
@@ -34,6 +34,7 @@ IDs are all model-specific.
 | Overwrite the Wi-Fi NVRAM file | That file carries **this machine's MAC**. Only `ccode`/`regrev` are patched in place, with a backup |
 | Overwrite `shell.json` | It is your bar layout. The plugin and fan widget are inserted surgically; everything else is untouched |
 | Reproduce the DisplayPort link fixes | Deliberately reverted — see `../04-display-and-gpu.md` |
+| Switch the GPU mux | `gpu-power-prefs` is an EFI variable and a wrong value plus a reboot is a black screen. Run `sudo gpu-mode igpu` yourself. The `power` phase installs `dgpu-power` and its units, which simply do nothing until you do |
 | `pacman -Sy` | A partial upgrade is how you get headers for a kernel you are not running, and DKMS silently building against the wrong tree |
 
 ## What needs a reboot
@@ -51,4 +52,5 @@ mbp133-t1-check                  # 0 failures (1 known-false warning, ../01 §1.
 
 The script's own `Verify` section runs 8 runtime assertions at the end of every
 invocation — DKMS built for the running kernel, codec bound, modules loaded,
-sleep hooks present, s2idle selected, GPU clamped.
+sleep hooks present, s2idle selected, and the dGPU either powered off or
+clamped.

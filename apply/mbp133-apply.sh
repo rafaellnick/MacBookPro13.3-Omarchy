@@ -114,6 +114,19 @@ need_pkg() {
 
 as_user() { sudo -u "$TARGET_USER" "$@"; }
 
+# systemd --user cannot be driven without the target user's bus, which may not
+# exist when this runs. `systemctl --user enable` only creates a .wants symlink,
+# so create it directly - systemd picks it up at the next daemon-reload.
+enable_user_unit() {
+	local unit=$1 target=$2
+	local link="$TARGET_HOME/.config/systemd/user/$target.wants/$unit"
+	if [[ -L $link ]]; then skip "enabled (user): $unit"; return 0; fi
+	if ((CHECK)); then would "enable (user) $unit"; return 0; fi
+	install -d -o "$TARGET_USER" -g "$TARGET_USER" "$(dirname "$link")" \
+		&& as_user ln -sf "../$unit" "$link" \
+		&& ok "enabled (user): $unit" || fail "enable (user) $unit"
+}
+
 # ------------------------------------------------------------------ packages --
 
 if wants packages; then
@@ -133,6 +146,7 @@ if wants packages; then
 	need_pkg dkms
 	need_pkg brightnessctl  # battery-low dim hook (06)
 	need_pkg jq             # used by omarchy tooling this relies on
+	need_pkg tlp            # power management (06); must not coexist with power-profiles-daemon
 fi
 
 # ---------------------------------------------------------------- audio DKMS --
@@ -231,6 +245,29 @@ if wants power; then
 	enable_unit macbook-power-tuning.service
 	install_file "$ASSETS/omarchy-hooks/dim-panel-on-low-battery.hook" \
 		"$TARGET_HOME/.config/omarchy/hooks/battery-low.d/dim-panel-on-low-battery.hook" 755 "$TARGET_USER:$TARGET_USER"
+
+	# TLP. Its stock RADEON_DPM_PERF_LEVEL=auto overwrites the GPU clock clamp on
+	# every AC/battery transition - this drop-in is what stops it (06 §6.2).
+	install_file "$ASSETS/tlp/01-macbook-power.conf" /etc/tlp.d/01-macbook-power.conf 644
+	if [[ $(systemctl is-active power-profiles-daemon 2>/dev/null) == active ]]; then
+		warn "power-profiles-daemon is active - it conflicts with TLP; disable one"
+	fi
+	enable_unit tlp.service
+
+	# Powering the dGPU off: -5.75 W, the largest single win (04 §4.4).
+	# The system unit has NO [Install] section on purpose - running this at boot
+	# hangs the machine. The user unit runs it after the graphical session, which
+	# is the only safe moment. Neither does anything unless the mux is already on
+	# the iGPU; dgpu-power refuses otherwise, so this is safe to install in dgpu
+	# mode too.
+	install_file "$ASSETS/usr-local-sbin/dgpu-power" /usr/local/sbin/dgpu-power 755
+	install_file "$ASSETS/systemd-system/disable-dgpu.service" /etc/systemd/system/disable-dgpu.service 644
+	install_file "$ASSETS/systemd-user/dgpu-off.service" \
+		"$TARGET_HOME/.config/systemd/user/dgpu-off.service" 644 "$TARGET_USER:$TARGET_USER"
+	enable_user_unit dgpu-off.service graphical-session.target
+	if [[ -e /var/lib/dgpu-power/attempt-incomplete ]]; then
+		warn "dgpu-power circuit breaker is TRIPPED - 'off' will refuse until you investigate and rm /var/lib/dgpu-power/attempt-incomplete"
+	fi
 fi
 
 # --------------------------------------------------------------------- shell --
@@ -389,7 +426,10 @@ chk "Touch Bar module loaded"                    grep -q '^apple_ib_tb ' /proc/m
 chk "Wi-Fi module loaded"                        grep -q '^brcmfmac ' /proc/modules
 chk "sleep hooks installed (3)"                  bash -c "[ \$(ls /usr/lib/systemd/system-sleep/ | grep -cE 'brcmfmac-reload|touchbar-resume|applespi-reload') -eq 3 ]"
 chk "s2idle selected"                            bash -c "grep -q '\[s2idle\]' /sys/power/mem_sleep"
-chk "GPU clamped to low"                         bash -c "grep -qx low /sys/class/drm/card*/device/power_dpm_force_performance_level"
+# Either state is correct, and "off" is the better one. A switched-off dGPU
+# returns EBUSY on that sysfs read, so testing only for "low" reports a failure
+# in exactly the configuration that saves the most power (04 §4.4).
+chk "dGPU off, or clamped to low"                bash -c "grep -q ':Off:' /sys/kernel/debug/vgaswitcheroo/switch 2>/dev/null || grep -qx low /sys/class/drm/card*/device/power_dpm_force_performance_level"
 
 printf '\n%s==> %d applied, %d already correct, %d warnings, %d failed%s\n' \
 	"$BLU" "$applied" "$skipped" "$warned" "$failed" "$RST"

@@ -89,48 +89,73 @@ deleted once the verdict was clear. `HandleLidSwitch` is back to plain
 
 ---
 
-## 10.2 Running the panel on the Intel iGPU — works, but is worse
+## 10.2 ✅ NOT a dead end — the iGPU path, resolved
 
-### It does work
+**This section used to say the iGPU switch was a loss. That was wrong, and the
+mistake is instructive enough to keep.** The configuration now runs on the Intel
+iGPU with the AMD card powered off, at **13.29 W against a 19.04 W baseline**.
+The full writeup lives in [04-display-and-gpu.md](04-display-and-gpu.md) §4.4;
+what follows is only why it looked like a dead end for a day.
 
-Switching the mux via the EFI variable `gpu-power-prefs` genuinely succeeded:
+### The trap: the intermediate state is genuinely worse
+
+Moving the panel to the iGPU and stopping there measures **~2 W worse**, twice,
+a day apart. Both GPUs are then powered and you pay for two. The saving is
+entirely in the *second* step — switching the AMD card off — and Polaris 11 in a
+gmux Mac cannot get there by itself:
 
 ```
-card1-eDP-1  [i915]  connected        ← panel on the Intel GPU
-mux:  0:IGD:+:Pwr:0000:00:02.0
+amdgpu 0000:01:00.0: Runtime PM not available
 ```
 
-Earlier attempts had failed because i915 dropped the connector at probe with
-`failed to retrieve link info` — an AUX/DPCD read failure. The gmux switches the
-panel's data lanes **and its AUX channel** together, so with the mux on AMD,
-i915's DDI A is wired to nothing. Only a firmware-level switch resolves that
-chicken-and-egg.
+No ATPX, no `_PR3`, so the `power/` directory has no `runtime_usage`,
+`runtime_enabled` or `autosuspend_delay_ms` at all. Waiting for the card to
+runtime-suspend, no matter how thoroughly nothing is holding it, waits forever.
 
-### But it measured *worse*
+### The second trap: measuring a half-built configuration
 
-**20.69 W** on the iGPU against **18.7 W** on AMD, because both GPUs stay
-powered and amdgpu cannot runtime-suspend while the compositor holds it. The
-saving only materialises if the AMD card can actually be powered down.
+The original 20.69 W was recorded **before** the `AQ_DRM_DEVICES` pinning
+existed — it was written 14 minutes after that measurement. Hyprland and
+Xwayland still held the AMD card. So the number was real but the conclusion
+drawn from it was not, and it was written into these docs as settled fact.
 
-### ⚠️ And powering the AMD card down wedges the machine
+> **Lesson worth more than the watts:** a negative result measured on an
+> incomplete configuration is not a negative result. Record what was actually
+> in place at the time, or the number will be believed later for the wrong
+> reason.
+
+### ⚠️ The naked `echo OFF` genuinely does wedge the machine
 
 ```
 echo OFF > /sys/kernel/debug/vgaswitcheroo/switch
 ```
 
-**Never do this.** The write never returned, subsequent reads of that file
-blocked, and amdgpu was left in an uninterruptible kernel wait — taking the
-machine down with it. The 13,3 guides warn about exactly this.
+On 2026-09-07 this never returned, every later read of the switch file blocked,
+amdgpu sat in an uninterruptible kernel wait, and the machine had to be power
+cycled. **Never run it directly.** The cause was a missing precondition — live
+file descriptors on the AMD card — and `/usr/local/sbin/dgpu-power` exists to
+check that precondition, plus a circuit breaker, before it writes. Use that.
 
-The safe equivalent is restricting `AQ_DRM_DEVICES` to the card holding the
-panel, letting the other drop to D3cold on its own — see
-[09-desktop-shell.md](09-desktop-shell.md) §9.1.
+### `force_igd` does not apply to this machine
 
-### Also: external outputs die
+Published recipes switch the mux with `options apple-gmux force_igd=1`. That
+parameter arrived with the T2 **MMIO** gmux support (MacBookPro15,x / 16,x).
+This machine has
 
-Every external DisplayPort output hangs off the AMD card. With the mux on the
-iGPU they do not work at all. The two goals are mutually exclusive on this
-hardware.
+```
+apple_gmux: Found gmux version 4.0.29 [indexed]
+```
+
+a pre-T2 **indexed** gmux, and `modinfo -p apple_gmux` prints nothing — the
+driver has no module parameters at all. The EFI-variable route
+(`gpu-power-prefs`, i.e. `gpu-mode igpu`) is this generation's equivalent, so
+those recipes transfer with that one substitution.
+
+### Still true: external outputs die
+
+Every external DisplayPort output hangs off the AMD card. On the iGPU they do
+not work at all. Low power and external displays remain mutually exclusive on
+this hardware — `sudo gpu-mode dgpu` plus a reboot before docking.
 
 ---
 
@@ -184,8 +209,9 @@ Three independent findings rule out every source. Full evidence in
 | Attempted | Verdict |
 |---|---|
 | Hibernate / S4 | **Impossible** — firmware refuses, 3 ms abort with no device errors |
-| Panel on iGPU | Works, but measured worse and kills external outputs |
-| `vgaswitcheroo` OFF | **Wedges the kernel.** Never run |
+| Panel on iGPU *alone* | Works, but ~2 W **worse** — the card cannot sleep by itself |
+| Panel on iGPU **+ dGPU off** | ✅ **Works. −5.75 W (−30 %).** Kills external outputs. See 04 §4.4 |
+| `vgaswitcheroo` OFF, unguarded | **Wedges the kernel.** Never run directly — use `dgpu-power` |
 | Touch ID | Impossible, and unsafe to probe |
 | Authentic Wi-Fi NVRAM | Does not exist on this system |
 | `pcie_ports=native` | Not tried — `compat` is required for USB-C after resume |

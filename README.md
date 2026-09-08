@@ -39,7 +39,7 @@ later, on top of that.
 | [01-touch-bar.md](01-touch-bar.md) | Touch Bar: DKMS build, HID enumeration, resume race |
 | [02-audio.md](02-audio.md) | CS8409/CS42L83 patched codec, and its kernel-update fragility |
 | [03-wifi.md](03-wifi.md) | Regulatory domain, the generic NVRAM profile, D3 sleep failure |
-| [04-display-and-gpu.md](04-display-and-gpu.md) | External DP link training, GPU mux, panel selection |
+| [04-display-and-gpu.md](04-display-and-gpu.md) | External DP link training, GPU mux, panel selection, powering the dGPU off |
 | [05-sleep-and-resume.md](05-sleep-and-resume.md) | **The largest module.** s2idle, and the three drivers that do not survive it |
 | [06-power-and-battery.md](06-power-and-battery.md) | Measured draw, what actually saved watts, what did not |
 | [07-input-devices.md](07-input-devices.md) | `applespi` keyboard and trackpad, SPI desync on resume |
@@ -57,7 +57,7 @@ later, on top of that.
 | Touch Bar | Working, survives resume | 01 |
 | Audio | Working, **fragile across kernel updates** | 02 |
 | Wi-Fi | Working; regulatory domain corrected; unloaded across sleep by design | 03 |
-| Internal display | Working on the AMD GPU | 04 |
+| Internal display | Working on the **Intel iGPU**, AMD card powered off (−5.75 W) | 04 |
 | External display | **No adaptations applied** — link fixes were reverted | 04 |
 | Suspend (s2idle) | **Working** — was completely broken until 2026-09-07 | 05 |
 | Hibernate | **Impossible.** Firmware refuses S4 | 10 |
