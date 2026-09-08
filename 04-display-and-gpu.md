@@ -49,7 +49,20 @@ failed under load → adapter demoted itself.
 144 Hz is out of reach for a second reason too: the EDID's HDMI block caps TMDS
 at 340 MHz and the 144 Hz timing needs 351 MHz. **Ask for 120, never 144.**
 
-### Fix
+### Fix — ⚠️ REVERTED, NOT CURRENTLY APPLIED
+
+**Status 2026-09-07: all of the following was removed at the user's request**
+("revert everything that was made to fix the 120 Hz output"). None of these
+files exists on the machine now:
+
+- `/usr/local/bin/dp3-link-hbr2` — absent
+- `/etc/systemd/system/dp3-link-hbr2.service` — absent
+- `/etc/udev/rules.d/99-dp3-link-hbr2.rules` — absent
+
+The external monitor therefore runs at whatever the adapter negotiates, with no
+intervention. The analysis below is retained because it is correct and would be
+the basis of any future attempt — but **it describes a fix that is not in
+place.**
 
 - `/usr/local/bin/dp3-link-hbr2` — reads the sink's *reported* lane count and
   pins the preferred link setting to `2 0x14` for two lanes, `1 0x14` for one,
@@ -78,9 +91,9 @@ the generated file will still pin 60. Either clear the DP-3 block from
 `hyprctl keyword monitor` does **not** work on this Lua-parsed config — use
 `hyprctl eval 'hl.monitor({ ... })'` to test a rule live.
 
-**Superseded files, safe to delete:** `/usr/local/bin/omarchy-dp3-link-fix` and
-`/etc/systemd/system/omarchy-dp3-link-fix.service` (the old force-4-lanes
-version; service disabled, udev rule already gone).
+**Both the old force-4-lanes version and its replacement are gone.** The only
+display-related leftover is a `DP-3` block in `~/.config/hypr/hyprland-gui.lua`
+(line 23), which is harmless with no monitor attached.
 
 ---
 

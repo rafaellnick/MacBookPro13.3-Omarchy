@@ -1,0 +1,89 @@
+#!/bin/bash
+# Bar widget: fan RPM for this MacBookPro13,3.
+#
+# applesmc exposes both fans, but it registers its hwmon node WITHOUT a `name`
+# file - so libsensors skips it entirely and `sensors`, btop and omarchy's own
+# monitor widget all show no fans at all. The data is fine; nothing was reading
+# it. This reads the platform sysfs directly.
+#
+#   fan1 "Left side"   min 2160  max 5927
+#   fan2 "Right side"  min 2000  max 5489
+#
+# Reports the busier of the two, as a percentage of its own usable range, since
+# the two fans have different floors and ceilings. Prints Waybar-style JSON;
+# `class` is there so a theme can colour it when things get loud.
+
+set -uo pipefail
+
+SMC=/sys/devices/platform/applesmc.768
+
+# No applesmc (different hardware, module not loaded) - print nothing so the
+# bar shows an empty slot rather than an error.
+[ -d "$SMC" ] || exit 0
+
+read_int() { local v; v=$(cat "$1" 2>/dev/null) || return 1; [[ $v =~ ^-?[0-9]+$ ]] || return 1; echo "$v"; }
+
+best_pct=-1
+best_rpm=0
+detail=""
+any=0
+
+for input in "$SMC"/fan[0-9]_input; do
+	[ -e "$input" ] || continue
+	base=${input%_input}
+	rpm=$(read_int "$input") || continue
+	min=$(read_int "${base}_min") || min=0
+	max=$(read_int "${base}_max") || max=0
+	label=$(cat "${base}_label" 2>/dev/null | tr -s ' ' | sed 's/ *$//')
+	[ -n "$label" ] || label=$(basename "$base")
+	any=1
+
+	pct=0
+	if (( max > min )); then
+		pct=$(( (rpm - min) * 100 / (max - min) ))
+		(( pct < 0 )) && pct=0
+		(( pct > 100 )) && pct=100
+	fi
+
+	manual=$(read_int "${base}_manual") || manual=0
+	mtag=""
+	(( manual == 1 )) && mtag=" (manual)"
+
+	detail+="${label}: ${rpm} RPM  ${pct}% of ${min}-${max}${mtag}\n"
+
+	if (( pct > best_pct )); then
+		best_pct=$pct
+		best_rpm=$rpm
+	fi
+done
+
+(( any )) || exit 0
+
+# Temperatures are what actually drive the fans, so they belong in the tooltip.
+temp_of() {
+	local want=$1 h n t
+	for h in /sys/class/hwmon/hwmon*; do
+		n=$(cat "$h/name" 2>/dev/null) || continue
+		[ "$n" = "$want" ] || continue
+		t=$(read_int "$h/temp1_input") || continue
+		echo "$(( t / 1000 ))"
+		return 0
+	done
+	return 1
+}
+
+temps=""
+for pair in "coretemp:CPU" "amdgpu:GPU" "nvme:SSD"; do
+	v=$(temp_of "${pair%%:*}") && temps+="${pair##*:} ${v}°C  "
+done
+temps=$(printf '%s' "$temps" | sed 's/[[:space:]]*$//')
+[ -n "$temps" ] && detail+="\n${temps}"
+
+if   (( best_pct >= 60 )); then class=high
+elif (( best_pct >= 25 )); then class=mid
+elif (( best_pct > 5 ));   then class=low
+else                            class=idle
+fi
+
+printf '{"text":"󰈐 %s","tooltip":"%s","class":"%s","percentage":%s}\n' \
+	"$best_rpm" "${detail%\\n}" "$class" "$best_pct"

@@ -102,15 +102,32 @@ bootable kernel is real insurance.
 
 `linux-lts 6.18.46` is installed alongside `linux 7.1.9`.
 
-> **⚠️ An LTS entry existing is not the same as an LTS entry being usable.**
-> The three DKMS modules must build against 6.18 as well, and everything fixed
-> in [05](05-sleep-and-resume.md) is kernel-adjacent — the `brcmfmac` D3
-> handshake, `applespi` resync, Touch Bar probe — so behaviour may differ in
-> either direction under 6.18.
+### Confirmed 2026-09-07: all DKMS modules built for LTS
+
+This was the uncertain part, and it succeeded completely:
+
+```
+appleibridge/0.1,        6.18.46-1-lts: installed
+snd_hda_macbookpro/0.1,  6.18.46-1-lts: installed (Original modules exist)
+linux-apfs-rw/0.3.21,    6.18.46-1-lts: installed
+
+/usr/lib/modules/6.18.46-1-lts/updates/dkms/
+  apfs.ko.zst  apple-ib-als.ko.zst  apple-ibridge.ko.zst
+  apple-ib-tb.ko.zst  snd-hda-codec-cs8409.ko.zst
+```
+
+A separate UKI was generated (`omarchy_linux-lts.efi`, 79 MB) and limine gained
+entry `[3] //linux-lts`. **`default_entry` still resolves to `[2] //linux`
+(7.1.9, `rootflags=subvol=@`)** — adding a kernel did not change what boots.
+
+> **⚠️ Modules building is still not the same as the machine working.**
+> Everything in [05](05-sleep-and-resume.md) is kernel-adjacent — the
+> `brcmfmac` D3 handshake, `applespi` resync, Touch Bar probe — and those
+> behaviours may differ under 6.18 in either direction.
 >
-> **Verify by booting it deliberately**, at a time of your choosing, and
-> checking Wi-Fi, sound, Touch Bar and trackpad. Do not discover the answer on
-> the night the primary kernel breaks.
+> **Boot it deliberately once**, at a time of your choosing, and check Wi-Fi,
+> sound, Touch Bar, trackpad and suspend. Do not discover the answer on the
+> night the primary kernel breaks.
 
 Check which modules built:
 

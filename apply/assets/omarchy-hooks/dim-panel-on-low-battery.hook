@@ -1,0 +1,42 @@
+#!/bin/bash
+# battery-low hook. omarchy calls this with the battery percentage when it
+# sends the "Time to recharge!" warning: threshold 10%, discharging, latched so
+# it fires once per discharge rather than repeatedly.
+#
+# Measured on this MacBookPro13,3, idle, 2880x1800 internal panel:
+#
+#   75% backlight -> 19.43 W
+#   50%           -> 18.84 W
+#   30%           -> 17.41 W
+#   10%           -> 16.36 W
+#
+# The panel spans ~3.1 W across its range and is the largest thing left that a
+# config change can move: the CPU is already governor=powersave / EPP=power,
+# the Radeon is clamped to its lowest sclk (214 MHz), ASPM L1 is on across every
+# link, USB is already autosuspending, and PCI runtime PM measured no better
+# than the noise floor.
+#
+# Dropping to 30% at the 10% warning is worth about 2 W, which at that point in
+# a worn battery's discharge is a real number of extra minutes. It only ever
+# dims - never raises - and the brightness keys keep working normally, so this
+# cannot trap the panel dark.
+
+set -uo pipefail
+
+CAP=30
+level=${1:-?}
+
+device=$(omarchy-hw-display 2>/dev/null) || exit 0
+[[ -n $device ]] || exit 0
+
+current=$(brightnessctl -d "$device" -m 2>/dev/null | awk -F, '{ gsub("%","",$4); print $4 }')
+[[ -n ${current:-} ]] || exit 0
+
+# Already at or below the cap: leave it alone rather than fight the user.
+(( current <= CAP )) && exit 0
+
+omarchy-brightness-display --no-osd "${CAP}%" >/dev/null 2>&1 || exit 0
+
+omarchy-notification-send -g 󱐋 "Panel dimmed to ${CAP}%" \
+  "Battery at ${level}%. Dimming from ${current}% saves about 2 W. Brightness keys still work." \
+  -i display-brightness-symbolic -t 10000 >/dev/null 2>&1 || true

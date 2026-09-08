@@ -58,7 +58,7 @@ later, on top of that.
 | Audio | Working, **fragile across kernel updates** | 02 |
 | Wi-Fi | Working; regulatory domain corrected; unloaded across sleep by design | 03 |
 | Internal display | Working on the AMD GPU | 04 |
-| External display | Working at 60 Hz; 120 Hz needs a physical replug | 04 |
+| External display | **No adaptations applied** — link fixes were reverted | 04 |
 | Suspend (s2idle) | **Working** — was completely broken until 2026-09-07 | 05 |
 | Hibernate | **Impossible.** Firmware refuses S4 | 10 |
 | Trackpad / keyboard | Working, resynced on resume | 07 |

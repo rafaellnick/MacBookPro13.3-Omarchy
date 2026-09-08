@@ -1,0 +1,7 @@
+# NVMe devices have deep hardware queues and do their own reordering, so an
+# extra kernel I/O scheduler mostly adds CPU work and latency. `none` is the
+# usual recommendation for NVMe; this box was on mq-deadline.
+#
+# Effect is modest and I have not benchmarked it on this machine - it is a
+# best-practice default, not a measured win. Delete this file to revert.
+ACTION=="add|change", KERNEL=="nvme[0-9]n[0-9]", ATTR{queue/scheduler}="none"

@@ -1,0 +1,47 @@
+# Pin Hyprland to whichever GPU actually has the panel.
+#
+# On this MacBookPro13,3 the internal panel is muxed between the Intel iGPU and
+# the Radeon Pro 455, selected by the EFI variable gpu-power-prefs (see
+# `gpu-mode`). Whichever card does NOT have the panel is dead weight: with the
+# mux on the iGPU the AMD card still gets opened by Hyprland and Xwayland, so it
+# never runtime-suspends and costs ~2 W for nothing.
+#
+# Restricting AQ_DRM_DEVICES to the card holding the panel lets the other one
+# drop to D3cold on its own. This is the safe version of
+# `echo OFF > /sys/kernel/debug/vgaswitcheroo/switch`, which wedges amdgpu in an
+# uninterruptible kernel wait and takes the machine down with it. Never do that.
+#
+# Selecting on "eDP connector with at least one MODE" - not on status. With the
+# mux on the iGPU the AMD card still advertises a phantom eDP that reports
+# connected but is `enabled: disabled`, `dpms: Off` and carries zero modes;
+# Hyprland will happily latch onto it at 0x0 and show nothing. Only the card
+# actually wired to the panel reports a real mode (2880x1800).
+#
+# Derived at session start rather than hardcoded, so it stays correct when the
+# mux moves. Card numbers are not stable - they shifted twice in one day - so
+# the card is located by PCI address via /dev/dri/by-path.
+#
+# CRITICAL: aquamarine splits AQ_DRM_DEVICES on ':' (not ','), so a by-path name
+# can NEVER be used as the value - "pci-0000:01:00.0-card" is torn into three
+# nonexistent paths, no GPU is found, and Hyprland aborts with
+# "CBackend::create() failed!" before any session exists. The symlink is
+# therefore resolved here to a colon-free /dev/dri/cardN node. Re-resolved every
+# session start, so the unstable card number never gets baked in.
+#
+# NOTE: the external DisplayPort outputs hang off the AMD card. While the mux is
+# on the iGPU and this pinning is active, external monitors will not work. Run
+# `gpu-mode dgpu` and reboot before docking.
+for _card in /sys/class/drm/card[0-9]-eDP-*; do
+    # NB: sysfs files report a 4096-byte size regardless of content, so -s is
+    # always true here. The content has to be read.
+    [ -n "$(cat "$_card/modes" 2>/dev/null)" ] || continue
+    _pci=$(basename "$(readlink -f "${_card%%-eDP-*}/device")")
+    _node=$(readlink -f "/dev/dri/by-path/pci-$_pci-card" 2>/dev/null)
+    # Refuse anything with a ':' in it rather than hand aquamarine a value it
+    # will split apart - an unset variable just means "use every GPU", which
+    # always boots.
+    case "$_node" in
+        /dev/dri/card*) [ -e "$_node" ] && export AQ_DRM_DEVICES="$_node" && break ;;
+    esac
+done
+unset _card _pci _node

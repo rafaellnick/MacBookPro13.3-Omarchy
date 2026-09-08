@@ -1,0 +1,74 @@
+#!/bin/bash
+# Unload the Broadcom Wi-Fi driver across sleep, and load it again on resume.
+#
+# This MacBookPro13,3 has a BCM43602/2 whose firmware (7.35.177.61, Nov 2015)
+# does not answer the D3 handshake:
+#
+#   brcmfmac 0000:03:00.0: brcmf_pcie_pm_enter_D3: Timeout on response for
+#                          entering D3 substate
+#   brcmfmac 0000:03:00.0: PM: failed to suspend async: error -5
+#   PM: Some devices failed to suspend, or early wake event detected
+#   systemd-sleep: Failed to put system to sleep. System resumed again:
+#                  Input/output error
+#
+# The kernel aborts the whole suspend, logind retries ~25s later, and the
+# machine sits in a sleep/wake loop with the lid shut - 241 D3 failures across
+# 250 suspend attempts, so this is the normal case, not a rare race. Each
+# aborted suspend also leaves the firmware wedged, which is why Wi-Fi went
+# spotty afterwards: scans start returning -12 (ENOMEM) and never recover
+# until the module is reloaded.
+#
+# With no brcmfmac bound there is no D3 handshake to time out, and the
+# post-resume load reinitialises the firmware from scratch. Cost: Wi-Fi
+# reconnects a few seconds after resume (measured: 7s).
+#
+# Everything is best-effort and timed out: if an unload fails, sleep proceeds
+# exactly as it does today rather than being blocked by this hook.
+#
+# NB on the module tests below: they read /proc/modules directly and never
+# `lsmod | grep -q`. `grep -q` exits on its first match and closes the pipe,
+# `lsmod` then dies of SIGPIPE, and under `set -o pipefail` that SIGPIPE
+# becomes the pipeline's exit status - so the test inverts. That bug made the
+# unload never run and restarted NetworkManager on every single resume.
+
+set -uo pipefail
+
+log() { printf 'brcmfmac-reload: %s\n' "$*"; }
+
+loaded() { grep -q '^brcmfmac ' /proc/modules; }
+
+case "${1:-}" in
+pre)
+	# suspend-then-hibernate runs these hooks more than once per cycle (the
+	# action goes suspend -> hibernate), so this must be safe to repeat:
+	# modprobe -r on an already-absent module is an error, not a no-op.
+	if ! loaded; then
+		log "already unloaded before ${2:-?} - nothing to do"
+		exit 0
+	fi
+	# brcmfmac_wcc uses brcmfmac, so it has to go first or the removal is
+	# refused as "in use".
+	if timeout 20 modprobe -r brcmfmac_wcc brcmfmac 2>/dev/null; then
+		log "unloaded before ${2:-?}"
+	else
+		log "unload failed before ${2:-?} (continuing; sleep may abort as before)"
+	fi
+	;;
+post)
+	if loaded; then
+		log "already loaded after ${2:-?} - nothing to do"
+		exit 0
+	fi
+	if timeout 30 modprobe brcmfmac 2>/dev/null; then
+		log "loaded after ${2:-?}"
+	else
+		log "load FAILED after ${2:-?}"
+	fi
+	if ! loaded; then
+		log "module still absent after ${2:-?} - restarting NetworkManager"
+		systemctl restart --no-block NetworkManager.service
+	fi
+	;;
+esac
+
+exit 0

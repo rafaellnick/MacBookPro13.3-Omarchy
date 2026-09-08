@@ -1,0 +1,50 @@
+#!/bin/bash
+# Switch this MacBookPro13,3 between its two GPUs.
+#
+#   igpu   Intel HD 530 drives the panel. ~5-6 W cheaper, but the external
+#          DisplayPort outputs hang off the AMD card and will NOT work.
+#   dgpu   Radeon Pro 455 drives the panel. Needed for external monitors.
+#
+# The selection is an EFI variable read by the firmware at power-on, so it only
+# takes effect after a REBOOT. It also persists into macOS until NVRAM is reset.
+#
+# Recovery if a switch ever leaves you with a black screen: hold
+# Cmd+Option+P+R at the boot chime through two more chimes to reset NVRAM,
+# which clears the variable and returns the panel to the AMD card.
+#
+# Hyprland follows automatically: ~/.config/uwsm/env-hyprland picks the card
+# that actually holds the panel and pins AQ_DRM_DEVICES to it, so the other card
+# is left unopened and can runtime-suspend to D3cold.
+set -uo pipefail
+
+VAR=/sys/firmware/efi/efivars/gpu-power-prefs-fa4ce28d-b62f-4c99-9cc3-6815686e30f9
+
+status() {
+	local sel panel
+	sel=$(od -A n -t x1 "$VAR" 2>/dev/null | awk '{print $5}')
+	case "$sel" in
+		00) echo "EFI selection : dgpu (AMD Radeon Pro 455)  [takes effect at boot]" ;;
+		01) echo "EFI selection : igpu (Intel HD 530)        [takes effect at boot]" ;;
+		*)  echo "EFI selection : unknown (${sel:-unreadable})" ;;
+	esac
+	for c in /sys/class/drm/card[0-9]-eDP-*; do
+		[ -n "$(cat "$c/modes" 2>/dev/null)" ] || continue
+		panel=$(basename "$(readlink -f "${c%%-eDP-*}/device/driver")")
+		echo "panel is on   : $panel  ($(basename "$c"))"
+	done
+	for c in /sys/class/drm/card[0-9]; do
+		[ -e "$c/device/driver" ] || continue
+		echo "  $(basename "$(readlink -f "$c/device/driver")"): runtime=$(cat "$c/device/power/runtime_status" 2>/dev/null)"
+	done
+	# Runs under sudo, so $HOME is /root - resolve the invoking user's home.
+	local home
+	home=$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)
+	echo "AQ_DRM_DEVICES would be: $( . "$home/.config/uwsm/env-hyprland" 2>/dev/null; echo "${AQ_DRM_DEVICES:-<unset>}" )"
+}
+
+case "${1:-status}" in
+	igpu) gpu-switch --integrated && echo "set to igpu - REBOOT to apply. External monitors will not work." ;;
+	dgpu) gpu-switch --dedicated  && echo "set to dgpu - REBOOT to apply. External monitors will work." ;;
+	status) status ;;
+	*) echo "usage: gpu-mode [igpu|dgpu|status]" >&2; exit 1 ;;
+esac

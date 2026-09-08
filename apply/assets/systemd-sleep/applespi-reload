@@ -1,0 +1,67 @@
+#!/bin/bash
+# Reload the Apple SPI input driver after resume.
+#
+# On this MacBookPro13,3 the trackpad comes back from s2idle with its SPI
+# stream desynchronised. The device is still there and still bound - nothing
+# looks broken - but every packet is rejected:
+#
+#   applespi spi-APP000D:00: Received corrupted packet
+#                            (invalid message length 8 - num-fingers 0, tp-len 48)
+#   applespi_got_data: 375 callbacks suppressed
+#
+# Measured after the 20:01->20:05 suspend: 40 such packets a minute and a dead
+# trackpad. Reloading re-runs the mode switch ("modeswitch done.") and the
+# stream comes back clean.
+#
+# post ONLY, deliberately. Unlike brcmfmac, applespi does not block suspend -
+# that same cycle recorded 0 aborts - so there is no reason to unload on the
+# way down, and every reason not to: this driver owns the INTERNAL KEYBOARD as
+# well as the trackpad, so the window where it is absent should be as short as
+# possible and only ever while the machine is already coming back up.
+#
+# For the same reason the load is retried rather than attempted once. Losing
+# this module means losing keyboard and trackpad together.
+#
+# NB: module presence is tested by reading /proc/modules, never
+# `lsmod | grep -q` - `grep -q` closes the pipe, lsmod dies of SIGPIPE, and
+# under `set -o pipefail` that inverts the test.
+
+set -uo pipefail
+
+log() { printf 'applespi-reload: %s\n' "$*"; }
+
+loaded() { grep -q '^applespi ' /proc/modules; }
+
+[ "${1:-}" = post ] || exit 0
+
+STAMP=/run/applespi-reload.stamp
+DEBOUNCE=10
+
+# suspend-then-hibernate fires the post hook more than once per cycle
+# (suspend -> hibernate). One reload per wake is enough.
+if [ -f "$STAMP" ]; then
+	now=$(date +%s)
+	last=$(cat "$STAMP" 2>/dev/null || echo 0)
+	if [ $((now - last)) -lt "$DEBOUNCE" ]; then
+		log "reloaded $((now - last))s ago - skipping (debounce ${DEBOUNCE}s)"
+		exit 0
+	fi
+fi
+
+timeout 20 modprobe -r applespi 2>/dev/null || log "rmmod failed (continuing)"
+sleep 1
+
+for attempt in 1 2 3; do
+	timeout 20 modprobe applespi 2>/dev/null
+	sleep 1
+	if loaded; then
+		date +%s >"$STAMP"
+		log "reloaded after ${2:-?} (attempt $attempt)"
+		exit 0
+	fi
+	log "load attempt $attempt failed - retrying"
+	sleep 2
+done
+
+log "FAILED to reload - internal keyboard and trackpad may be unavailable"
+exit 0

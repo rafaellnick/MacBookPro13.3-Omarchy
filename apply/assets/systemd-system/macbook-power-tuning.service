@@ -1,0 +1,11 @@
+[Unit]
+Description=Idle power tuning for MacBookPro13,3 (clamp idle GPU clocks)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/macbook-power-tuning.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

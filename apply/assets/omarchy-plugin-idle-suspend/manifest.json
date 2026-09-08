@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "local.idle-suspend",
+  "name": "Idle Suspend",
+  "version": "1.0.0",
+  "author": "Local",
+  "description": "Suspends the machine after a long idle, as the last step after screensaver, lock, and display-off.",
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}
