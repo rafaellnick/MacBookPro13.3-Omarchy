@@ -1,0 +1,26 @@
+#!/bin/bash
+# Low-wakeup battery status for the Omarchy bar.
+set -uo pipefail
+
+battery=/sys/class/power_supply/BAT0
+[[ -r $battery/capacity && -r $battery/status ]] || exit 0
+
+IFS= read -r capacity < "$battery/capacity" || exit 0
+IFS= read -r status < "$battery/status" || exit 0
+[[ $capacity =~ ^[0-9]+$ ]] || exit 0
+
+case $status in
+  Charging) icon='󰂄' ;;
+  Full) icon='󰁹' ;;
+  *)
+    if (( capacity >= 80 )); then icon='󰂂'
+    elif (( capacity >= 60 )); then icon='󰂀'
+    elif (( capacity >= 40 )); then icon='󰁾'
+    elif (( capacity >= 20 )); then icon='󰁼'
+    else icon='󰂃'
+    fi
+    ;;
+esac
+
+printf '{"text":"%s %s%%","tooltip":"Battery %s%% · %s"}\n' \
+  "$icon" "$capacity" "$capacity" "$status"

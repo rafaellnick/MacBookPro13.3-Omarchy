@@ -15,7 +15,7 @@ targets **Dell machines only** — `bullseye`, `warlock`, `cyborg`, `dolphin`,
 parser, and the **CS42L83 sub-codec that actually drives the speakers was never
 initialised**.
 
-`mbp133-t1-check` flags this correctly.
+The post-boot hardware hook checks both the DKMS build and the bound codec.
 
 ### Fix
 

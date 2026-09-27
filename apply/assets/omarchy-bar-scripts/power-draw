@@ -1,0 +1,43 @@
+#!/bin/bash
+
+set -u
+
+battery=/sys/class/power_supply/BAT0
+
+if [[ ! -r $battery/current_now || ! -r $battery/voltage_now ]]; then
+  printf '{"text":"󱐋 -- W","tooltip":"Battery power reading unavailable","class":"unknown"}\n'
+  exit 0
+fi
+
+read -r current < "$battery/current_now"
+read -r voltage < "$battery/voltage_now"
+read -r status < "$battery/status"
+
+if [[ ! $current =~ ^[0-9]+$ || ! $voltage =~ ^[0-9]+$ ]]; then
+  printf '{"text":"󱐋 -- W","tooltip":"Battery power reading unavailable","class":"unknown"}\n'
+  exit 0
+fi
+
+watts=$(LC_ALL=C awk -v current="$current" -v voltage="$voltage" \
+  'BEGIN { printf "%.2f", current * voltage / 1000000000000 }')
+
+case $status in
+  Discharging)
+    label="󱐋 ${watts} W"
+    tooltip="Current battery draw: ${watts} W"
+    class=discharging
+    ;;
+  Charging)
+    label="󰚥 ${watts} W"
+    tooltip="Battery charging power: ${watts} W"
+    class=charging
+    ;;
+  *)
+    label="󱐋 ${watts} W"
+    tooltip="Battery power: ${watts} W (${status})"
+    class=idle
+    ;;
+esac
+
+printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' \
+  "$label" "$tooltip" "$class"

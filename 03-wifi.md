@@ -1,10 +1,8 @@
 # 03 — Wi-Fi (Broadcom BCM43602)
 
-Two entirely separate stories: a **regulatory** problem fixed on 2026-09-06, and
-a **power-management** problem that broke suspend entirely, fixed 2026-09-07.
-
-The second one is in [05-sleep-and-resume.md](05-sleep-and-resume.md) §5.1 in
-full; summarised here because it is the same device.
+The regulatory configuration is corrected. Earlier attempts also reloaded the
+driver around suspend, but those hooks have been removed because suspend itself
+is currently blocked; see [05-sleep-and-resume.md](05-sleep-and-resume.md).
 
 ---
 
@@ -88,18 +86,14 @@ oversight.
 
 ---
 
-## 3.3 The driver is unloaded across every sleep — on purpose
+## 3.3 Suspend status
 
-The firmware (7.35.177.61, **Nov 2015**) never answers the D3 handshake, which
-aborted **every suspend on this machine**: 241 D3 failures across 250 attempts.
-
-`/usr/lib/systemd/system-sleep/brcmfmac-reload` unloads `brcmfmac` before sleep
-and loads it after. Cost: Wi-Fi reconnects ~7 s after resume. Full detail and
-evidence in [05-sleep-and-resume.md](05-sleep-and-resume.md) §5.1.
-
-**Consequence for debugging:** if `brcmfmac` is missing after a resume, that
-hook failed — it is not a driver crash. The post-boot health check watches for
-exactly this.
+The 2015 firmware did fail D3 handshakes during earlier suspend experiments.
+The old `brcmfmac-reload` system-sleep hook has since been removed. Automatic
+suspend is blocked because GPU and T1 failures make the whole path unsafe, and
+maintaining a Wi-Fi-specific workaround adds no benefit to the stable awake
+configuration. The post-boot health check still verifies that `brcmfmac` is
+loaded.
 
 ---
 
@@ -109,5 +103,5 @@ exactly this.
 iw dev wlp3s0 link                                    # signal, bitrate
 grep ^ccode /lib/firmware/brcm/brcmfmac43602-pcie.txt  # ccode=BR
 grep '^brcmfmac ' /proc/modules                        # loaded
-journalctl -b | grep -c "brcmf_pcie_pm_enter_D3"       # should be 0 now
+journalctl -b | grep "brcmf_pcie_pm_enter_D3"          # historical suspend symptom
 ```

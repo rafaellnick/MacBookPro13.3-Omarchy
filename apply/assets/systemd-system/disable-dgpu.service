@@ -7,10 +7,8 @@ ConditionPathExists=/sys/kernel/debug/vgaswitcheroo/switch
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/dgpu-power off
-# Restore the card before shutdown. The upstream guide reports shutdowns
-# hanging or taking minutes with the dGPU left off; bringing it back first
-# avoids that entirely.
-ExecStop=/usr/local/sbin/dgpu-power on
+# Leave the card off through shutdown. Re-enabling it after gmux has cut its
+# rails fails in amdgpu firmware resume on this machine and blocks reboot.
 
 # NO [Install] SECTION, DELIBERATELY. `systemctl enable` must fail. Running
 # this at boot is what the MacBookPro13,3 guide warns hangs the machine: sddm

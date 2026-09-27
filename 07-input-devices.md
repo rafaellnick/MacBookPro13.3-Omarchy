@@ -1,106 +1,54 @@
-# 07 — Input devices (keyboard and trackpad)
+# 07 — Keyboard, trackpad and fingerprint input
 
-Both the internal keyboard and the trackpad are driven by a **single** module,
-`applespi`, over SPI at `spi-APP000D:00`.
+The internal keyboard and trackpad use `applespi` over the same SPI controller.
+They currently work while the machine is awake, but intermittent sticky input
+has been observed. That issue remains open and should be investigated without
+mixing it into the completed power work.
 
-> **That single fact governs everything here.** Losing `applespi` costs keyboard
-> *and* trackpad together, which is why the resume fix is deliberately
-> conservative.
+## Sticky input symptom
 
----
-
-## 7.1 Trackpad dead after resume
-
-### Symptom
-
-Trackpad unresponsive after waking from s2idle. The device is **still present
-and still bound** — `Apple SPI Touchpad` appears in `/proc/bus/input/devices`,
-the driver is attached — so nothing looks wrong.
-
-### Evidence
-
-```
-applespi spi-APP000D:00: Received corrupted packet
-                         (invalid message length 8 - num-fingers 0, tp-len 48)
-applespi_got_data: 375 callbacks suppressed
-```
-
-Measured at **40 corrupted packets per minute** after the 20:01→20:05 suspend.
-
-### Cause
-
-The SPI stream desynchronises across suspend. Every packet is rejected, so no
-input events are produced. The link needs the driver's mode switch re-run, which
-only happens at probe.
-
-### Fix
-
-`/usr/lib/systemd/system-sleep/applespi-reload` reloads the module on resume.
-Success is visible as `applespi spi-APP000D:00: modeswitch done.` and the
-corrupted-packet rate returning to **0**.
-
-### Two deliberate design choices
-
-**`post` only — never `pre`.** Unlike `brcmfmac`, `applespi` does **not** block
-suspend; the same cycle recorded 0 aborts. So there is no reason to unload on
-the way down, and a strong reason not to: the window in which the internal
-keyboard is absent should be as short as possible, and only while the machine is
-already coming back up.
-
-**Retries up to 3×.** A single failed `modprobe` would cost keyboard and
-trackpad together. The hook retries, and logs
-`FAILED to reload - internal keyboard and trackpad may be unavailable` if all
-attempts fail.
-
-It debounces on `/run/applespi-reload.stamp` with a 10 s window, because
-`suspend-then-hibernate` fires post hooks more than once per cycle.
-
-### Manual recovery
-
-If the trackpad is ever dead and the hook did not fire:
+A key or pointer action can occasionally behave as though it remained active.
+Useful evidence for the next investigation is the kernel log around the event,
+the libinput event stream and whether both keyboard and trackpad fail together:
 
 ```bash
-sudo modprobe -r applespi && sleep 1 && sudo modprobe applespi
+sudo libinput debug-events
+journalctl -kf | grep -Ei 'applespi|spi|input|hid'
+grep -A8 -E 'Apple SPI (Keyboard|Touchpad)' /proc/bus/input/devices
 ```
 
-Safe to run from a terminal — you keep the shell you already have, and both
-devices return within a second or two.
+Avoid reloading `applespi` as an automatic sleep hook. That old workaround was
+created for a resume desynchronization, and automatic suspend is now blocked.
+Reloading the shared driver also temporarily removes both internal input
+devices. If manual recovery is ever necessary, have an external input device or
+an existing remote shell available first.
 
----
+## Function keys
 
-## 7.2 Function key behaviour
+`/etc/modprobe.d/hid_apple.conf` controls conventional Apple keyboard behavior.
+Touch Bar key layout is rendered by T1Bridge and no longer uses the
+`apple_ib_tb` module parameter described in older revisions of this repository.
 
-`/etc/modprobe.d/hid_apple.conf` sets `options hid_apple fnmode=2`.
+## Touch ID
 
-The Touch Bar strip has its own, separate `fnmode=1` (media by default, F-keys
-with `Fn` held) applied as an `apple_ib_tb` module parameter — see
-[01-touch-bar.md](01-touch-bar.md).
-
----
-
-## 7.3 Touch ID
-
-**Not possible.** Full evidence in [10-dead-ends.md](10-dead-ends.md) §10.3,
-including why it must not be chased by switching the T1's USB configuration.
-
-The practical substitute in use is `/etc/sudoers.d/10-timestamp`:
-
-```
-Defaults timestamp_timeout=60
-Defaults timestamp_type=global
-```
-
-One password per hour shared across all terminals, instead of sudo's default of
-5 minutes tracked **separately per TTY** — that per-terminal re-prompting is most
-of the friction a fingerprint reader would have removed.
-
----
-
-## Verify
+Touch ID is provided by `libfprint-t1bridge` and `fprintd-t1bridge`. The
+Touch Bar idle plugin publishes a lock-auth mode so the fingerprint surface
+stays available when the lock screen blanks the main panel.
 
 ```bash
-grep -E "Apple SPI" /proc/bus/input/devices        # Keyboard and Touchpad
-basename $(readlink -f /sys/bus/spi/devices/spi-APP000D:00/driver)   # applespi
-journalctl -b | grep -c "Received corrupted packet"                  # 0
-journalctl -b | grep "applespi-reload"                               # one per resume
+fprintd-list "$USER"
+fprintd-verify "$USER"
+systemctl status fprintd.service
+```
+
+Enrollment and matching remain subject to the T1Bridge package's supported
+PAM integrations; the sensor should not be probed by manually changing the T1
+USB configuration.
+
+## Verification
+
+```bash
+grep -E 'Apple SPI (Keyboard|Touchpad)' /proc/bus/input/devices
+basename "$(readlink -f /sys/bus/spi/devices/spi-APP000D:00/driver)"
+journalctl -b -k | grep -i applespi
 ```

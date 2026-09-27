@@ -18,12 +18,13 @@ PartOf=graphical-session.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Let the session settle so any transient holder has released the card.
-ExecStartPre=/usr/bin/sleep 8
+# The unit starts only after graphical-session.target. Two seconds lets SDDM
+# release transient DRM handles; dgpu-power still refuses if any holder remains.
+ExecStartPre=/usr/bin/sleep 2
 ExecStart=/usr/bin/sudo -n /usr/local/sbin/dgpu-power off
-# Bring the card back when the session ends, so shutdown does not stall - the
-# upstream guide reports shutdowns hanging with the dGPU left off.
-ExecStop=/usr/bin/sudo -n /usr/local/sbin/dgpu-power on
+# Keep the card off through logout and shutdown. On this MacBookPro13,3,
+# powering it back on after gmux has cut its rails fails in amdgpu firmware
+# resume and blocks reboot. EFI initializes it normally on the next boot.
 
 [Install]
 WantedBy=graphical-session.target

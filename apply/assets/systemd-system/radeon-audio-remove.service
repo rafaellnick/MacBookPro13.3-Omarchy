@@ -1,0 +1,16 @@
+[Unit]
+Description=Remove unused Radeon HDMI audio before graphical login
+Documentation=https://github.com/paskaz/mbp143-linux-suspend-fix
+Wants=systemd-udev-settle.service
+After=systemd-udev-settle.service
+Before=display-manager.service
+ConditionPathExists=/sys/bus/pci/devices/0000:01:00.1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/radeon-audio-remove remove
+TimeoutStartSec=15
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

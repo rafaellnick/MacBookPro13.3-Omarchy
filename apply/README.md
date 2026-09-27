@@ -1,56 +1,62 @@
-# apply/ — reproducible provisioning
+# Reproducible provisioning
 
-`mbp133-apply.sh` applies every adaptation this MacBookPro13,3 needs on Omarchy.
-
-```bash
-./mbp133-apply.sh --list        # what it does, no root needed
-sudo ./mbp133-apply.sh --check  # dry run — changes nothing
-sudo ./mbp133-apply.sh          # apply everything except the bootloader
-```
-
-## Design
-
-**Assets are exact copies, not retyped.** `assets/` holds byte-for-byte copies
-of the 31 files taken from the working machine. The script installs those. This
-avoids transcription drift between what is documented, what is installed, and
-what actually works.
-
-**Idempotent.** Every item is compared before writing. A second run on a correct
-machine reports `0 applied, 51 already correct, 0 warnings, 0 failed`.
-
-**Phase-scoped.** `--phase touchbar` (or `wifi`, `sleep`, `power`, `shell`,
-`maintenance`, `packages`, `audio-dkms`) applies one area. Phase names match the
-numbered documentation modules in `../`.
-
-**Refuses the wrong hardware.** It exits if `product_name` is not
-`MacBookPro13,3`. Fan ranges, GPU mux behaviour, iBridge HID handling and codec
-IDs are all model-specific.
-
-## Things it deliberately does *not* do
-
-| | Why |
-|---|---|
-| Edit the bootloader by default | The one step that can leave the machine unbootable. Opt in with `--allow-bootloader --phase bootloader`; it backs up `/etc/default/limine` first |
-| Overwrite the Wi-Fi NVRAM file | That file carries **this machine's MAC**. Only `ccode`/`regrev` are patched in place, with a backup |
-| Overwrite `shell.json` | It is your bar layout. The plugin and fan widget are inserted surgically; everything else is untouched |
-| Reproduce the DisplayPort link fixes | Deliberately reverted — see `../04-display-and-gpu.md` |
-| Switch the GPU mux | `gpu-power-prefs` is an EFI variable and a wrong value plus a reboot is a black screen. Run `sudo gpu-mode igpu` yourself. The `power` phase installs `dgpu-power` and its units, which simply do nothing until you do |
-| `pacman -Sy` | A partial upgrade is how you get headers for a kernel you are not running, and DKMS silently building against the wrong tree |
-
-## What needs a reboot
-
-- Wi-Fi regulatory change (or stop NetworkManager and reload `brcmfmac`)
-- Any kernel command-line change
-- `modprobe.d` changes
-
-## After running
+`mbp133-apply.sh` installs the stable awake configuration documented in the
+repository. It refuses hardware other than `MacBookPro13,3`, compares files
+before replacing them and supports phase-scoped dry runs.
 
 ```bash
-sudo ./mbp133-apply.sh --check   # should report 0 applied
-mbp133-t1-check                  # 0 failures (1 known-false warning, ../01 §1.2)
+./mbp133-apply.sh --list
+sudo ./mbp133-apply.sh --check
+sudo ./mbp133-apply.sh
+sudo ./mbp133-apply.sh --phase touchbar
 ```
 
-The script's own `Verify` section runs 8 runtime assertions at the end of every
-invocation — DKMS built for the running kernel, codec bound, modules loaded,
-sleep hooks present, s2idle selected, and the dGPU either powered off or
-clamped.
+Phases are `packages`, `audio-dkms`, `touchbar`, `wifi`, `sleep`, `power`,
+`shell` and `maintenance`. `bootloader` is opt-in with
+`--allow-bootloader --phase bootloader`.
+
+## Safety boundaries
+
+- The installer never changes the EFI GPU preference. Use `sudo gpu-mode igpu`
+  after reading [the GPU documentation](../04-display-and-gpu.md).
+- Automatic lid and idle suspend remain disabled because resume is unreliable.
+- Obsolete `applespi`, `brcmfmac` and Touch Bar resume hooks are removed.
+- The misnamed `omarchy-nvme-suspend-fix.service` is disabled and removed.
+- The dGPU user unit has no power-on stop action, which avoids shutdown hangs.
+- Passwordless sudo is limited to the guarded `dgpu-power off` command.
+- The Wi-Fi NVRAM file is patched in place so its machine-specific data is not
+  overwritten.
+- Shell integration uses user overrides and edits `shell.json` as JSON.
+- Lock-state integration patches an existing user clone of `omarchy.lock`; it
+  warns and leaves the clone untouched if the Omarchy 4.0.4 patch no longer
+  matches.
+
+The script checks the official-repository dependencies with `pacman`. T1Bridge
+packages come from their Arch package repository and are reported if missing;
+the root installer does not invoke an AUR helper.
+
+## Optional T1Bridge low-wakeup build
+
+The compiled custom binaries are not stored in Git. Build them from the pinned
+upstream commit with:
+
+```bash
+sudo ./build-t1bridge-low-wakeup.sh
+```
+
+The helper clones T1Bridge, checks out
+`81cbdf81026a16e02f0bea74735c6b029a8ffae2`, applies the tracked patch, runs the
+renderer tests, builds both services and installs systemd drop-ins. It requires
+network access and the Rust toolchain, which is why the normal apply script
+does not run it implicitly.
+
+## What requires a reboot
+
+- changing EFI GPU mode;
+- kernel command-line changes;
+- kernel/DKMS updates;
+- Wi-Fi regulatory changes unless the driver is deliberately reloaded.
+
+Run `sudo ./mbp133-apply.sh --check` after provisioning. Any `WOULD` line is a
+configuration difference; `not` lines in the final verification block describe
+runtime state and may require a login or reboot before they become true.

@@ -1,0 +1,45 @@
+--- a/Service.qml
++++ b/Service.qml
+@@ -15,0 +16,2 @@
++  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR")
++  readonly property string touchbarLockStatePath: runtimeDir + "/t1bridge-touchbar-lock"
+@@ -35,0 +38,2 @@
++  property bool pendingTouchbarLockState: false
++  property bool touchbarLockWritePending: false
+@@ -115,0 +120,20 @@
++  function publishTouchbarLockState() {
++    var active = root.lockRequested
++    if (touchbarLockStateWriter.running) {
++      root.pendingTouchbarLockState = active
++      root.touchbarLockWritePending = true
++      return
++    }
++    root.writeTouchbarLockState(active)
++  }
++
++  function writeTouchbarLockState(active) {
++    touchbarLockStateWriter.command = [
++      "/usr/bin/bash", "-c",
++      "umask 077; printf '%s %s\\n' \"$1\" \"$PPID\" > \"$2.tmp\" && mv -f \"$2.tmp\" \"$2\"; "
++        + "/usr/share/omarchy/bin/omarchy-shell -q touchbar-idle lockState \"$1\"",
++      "touchbar-lock", active ? "1" : "0", root.touchbarLockStatePath
++    ]
++    touchbarLockStateWriter.running = true
++  }
++
+@@ -413,0 +438,10 @@
++  Process {
++    id: touchbarLockStateWriter
++    onExited: function() {
++      if (!root.touchbarLockWritePending) return
++      var active = root.pendingTouchbarLockState
++      root.touchbarLockWritePending = false
++      root.writeTouchbarLockState(active)
++    }
++  }
++
+@@ -483,0 +518,2 @@
++  onLockRequestedChanged: root.publishTouchbarLockState()
++
+@@ -504,0 +541 @@
++    publishTouchbarLockState()

@@ -1,0 +1,16 @@
+[Unit]
+Description=Battery-only Thunderbolt power saving for MacBookPro13,3
+Documentation=https://wiki.archlinux.org/title/Mac/Troubleshooting#Disabling_Thunderbolt
+After=systemd-modules-load.service systemd-udev-trigger.service
+ConditionPathExists=/sys/bus/pci/devices/0000:06:00.0
+ConditionPathExists=/sys/bus/pci/devices/0000:7c:00.0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/macbook-thunderbolt-power monitor
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=60s
+
+[Install]
+WantedBy=multi-user.target

@@ -6,10 +6,10 @@
 # mux on the iGPU the AMD card still gets opened by Hyprland and Xwayland, so it
 # never runtime-suspends and costs ~2 W for nothing.
 #
-# Restricting AQ_DRM_DEVICES to the card holding the panel lets the other one
-# drop to D3cold on its own. This is the safe version of
-# `echo OFF > /sys/kernel/debug/vgaswitcheroo/switch`, which wedges amdgpu in an
-# uninterruptible kernel wait and takes the machine down with it. Never do that.
+# Restricting AQ_DRM_DEVICES to the card holding the panel leaves the Radeon
+# without user-space holders. The guarded `dgpu-power` helper can then use
+# vga_switcheroo after login. A raw write to the switch file previously wedged
+# amdgpu in an uninterruptible wait; never bypass the helper's checks.
 #
 # Selecting on "eDP connector with at least one MODE" - not on status. With the
 # mux on the iGPU the AMD card still advertises a phantom eDP that reports

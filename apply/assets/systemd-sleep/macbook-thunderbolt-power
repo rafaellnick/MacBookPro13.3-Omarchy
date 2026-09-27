@@ -1,0 +1,11 @@
+#!/bin/sh
+# Remove unused Thunderbolt NHI drivers from the suspend callback graph, use
+# synchronous device suspend for this cycle, then restore the current policy.
+case "$1" in
+    pre)
+        exec /usr/local/sbin/macbook-thunderbolt-power prepare-sleep
+        ;;
+    post)
+        exec /usr/local/sbin/macbook-thunderbolt-power resume
+        ;;
+esac

@@ -13,8 +13,8 @@
 # which clears the variable and returns the panel to the AMD card.
 #
 # Hyprland follows automatically: ~/.config/uwsm/env-hyprland picks the card
-# that actually holds the panel and pins AQ_DRM_DEVICES to it, so the other card
-# is left unopened and can runtime-suspend to D3cold.
+# that actually holds the panel and pins AQ_DRM_DEVICES to it. In iGPU mode the
+# guarded graphical-session service can then power the unheld Radeon off.
 set -uo pipefail
 
 VAR=/sys/firmware/efi/efivars/gpu-power-prefs-fa4ce28d-b62f-4c99-9cc3-6815686e30f9

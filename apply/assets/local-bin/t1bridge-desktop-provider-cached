@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# Keep T1Bridge's complete Omarchy desktop-provider contract while avoiding
+# repeated pactl/Quickshell/jq discovery work on every one-second status poll.
+# Actions still go directly to the package-owned provider and invalidate the
+# cached snapshot so the renderer refreshes on its next poll.
+set -uo pipefail
+
+provider=/usr/lib/t1bridge-omarchy/desktop-provider
+cache=${XDG_RUNTIME_DIR:-/run/user/$UID}/t1bridge-desktop-status.cache
+ttl=${T1BRIDGE_STATUS_CACHE_SECONDS:-5}
+
+[[ $ttl =~ ^[1-9][0-9]*$ ]] || ttl=5
+
+fast_status() {
+  local capabilities=12 volume=- muted=- audio whole fraction media_names name remainder
+
+  audio=$(LC_ALL=C wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null) || audio=
+  if [[ $audio =~ ^Volume:[[:space:]]+([0-9]+)\.([0-9]+)([[:space:]]+\[MUTED\])?$ ]]; then
+    whole=${BASH_REMATCH[1]}
+    fraction=${BASH_REMATCH[2]}00
+    volume=$((10#$whole * 100 + 10#${fraction:0:2}))
+    (( volume <= 100 )) || volume=100
+    [[ $audio == *'[MUTED]'* ]] && muted=1 || muted=0
+    capabilities=$((capabilities | 1))
+  fi
+
+  # Omarchy's media capability is the presence of an MPRIS player. Reading
+  # the user bus gives the same answer without starting a Quickshell IPC client.
+  media_names=$(busctl --user --no-pager --no-legend list 2>/dev/null) || return 1
+  while read -r name remainder; do
+    if [[ $name == org.mpris.MediaPlayer2.* ]]; then
+      capabilities=$((capabilities | 2))
+      break
+    fi
+  done <<< "$media_names"
+
+  printf 'T1BRIDGE-DESKTOP 1 %d %s %s\n' "$capabilities" "$volume" "$muted"
+}
+
+# T1Bridge capability bit 16 lets the stock renderer blank the OLED Touch Bar
+# whenever the desktop display is powered down. Read DRM sysfs directly so the
+# renderer's one-second status poll does not have to launch hyprctl and jq.
+with_display_power() {
+  local line=$1 magic version capabilities volume muted remainder
+  local connector status enabled dpms display=0 touchbar_awake shell_pid shell_comm
+  local idle_state=${XDG_RUNTIME_DIR:-/run/user/$UID}/t1bridge-touchbar-awake
+
+  read -r magic version capabilities volume muted remainder <<< "$line"
+  [[ $magic == T1BRIDGE-DESKTOP && $version == 1 &&
+     $capabilities =~ ^[0-9]+$ ]] || return 1
+
+  for connector in /sys/class/drm/card*-eDP-*; do
+    [[ -r $connector/status && -r $connector/enabled && -r $connector/dpms ]] || continue
+    read -r status < "$connector/status" || continue
+    read -r enabled < "$connector/enabled" || continue
+    read -r dpms < "$connector/dpms" || continue
+    if [[ $status == connected && $enabled == enabled && $dpms == On ]]; then
+      display=1
+      break
+    fi
+  done
+
+  # A user-shell IdleMonitor publishes 0 for short-idle blanking, 1 for normal
+  # panel-following behavior, and 2 while the lock screen has fingerprint PAM
+  # armed. Mode 2 keeps Touch ID available even after lock-screen DPMS blanking.
+  # Require the publishing Quickshell process to still be alive; missing,
+  # invalid, or stale state falls back to the physical panel state.
+  if [[ -r $idle_state ]]; then
+    read -r touchbar_awake shell_pid < "$idle_state" || touchbar_awake=1
+    if [[ $touchbar_awake =~ ^[012]$ && $shell_pid =~ ^[0-9]+$ &&
+          -r /proc/$shell_pid/comm ]]; then
+      IFS= read -r shell_comm < "/proc/$shell_pid/comm" || shell_comm=
+      if [[ $shell_comm == quickshell ]]; then
+        case $touchbar_awake in
+          0) display=0 ;;
+          2) display=1 ;;
+        esac
+      fi
+    fi
+  fi
+
+  capabilities=$((capabilities | 16))
+  printf 'T1BRIDGE-DESKTOP 1 %d %s %s %d\n' \
+    "$capabilities" "$volume" "$muted" "$display"
+}
+
+if (( $# != 2 )) || [[ $1 != v1 || $2 != status ]]; then
+  : > "$cache"
+  exec "$provider" "$@"
+fi
+
+now=$(printf '%(%s)T' -1)
+when=
+line=
+if [[ -r $cache ]]; then
+  {
+    IFS= read -r when || true
+    IFS= read -r line || true
+  } < "$cache"
+fi
+
+if [[ $when =~ ^[0-9]+$ ]] && (( now - when < ttl )) &&
+  [[ $line == "T1BRIDGE-DESKTOP 1 "* ]]; then
+  with_display_power "$line"
+  exit 0
+fi
+
+line=$(fast_status) || line=$("$provider" "$@") || exit
+[[ $line == "T1BRIDGE-DESKTOP 1 "* ]] || exit 1
+printf '%s\n%s\n' "$now" "$line" > "$cache"
+with_display_power "$line"

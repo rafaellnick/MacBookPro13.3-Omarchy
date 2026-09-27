@@ -36,17 +36,14 @@ Every non-obvious parameter and why it is there:
 
 | Parameter | Reason | Reference |
 |---|---|---|
-| `mem_sleep_default=s2idle` | `deep` fails to resume amdgpu (`error -22`) | [05](05-sleep-and-resume.md) |
-| `pcie_ports=compat` | **required for USB-C after resume** — `mbp133-t1-check` asserts it | [10](10-dead-ends.md) §10.1 |
-| `modprobe.blacklist=apple_ibridge,apple_ib_tb,apple_ib_als` | the Touch Bar service loads these itself, in the right order | [01](01-touch-bar.md) |
-| `resume=/dev/mapper/omarchy_root resume_offset=1914441` | hibernate wiring — **correct but unusable**, firmware refuses S4 | [10](10-dead-ends.md) §10.1 |
+| `mem_sleep_default=s2idle` | Selects the only exposed suspend variant; suspend remains blocked by policy | [05](05-sleep-and-resume.md) |
+| `pcie_ports=compat` | Preserves the established USB-C/PCIe topology on this machine | [05](05-sleep-and-resume.md) |
+| `resume=/dev/mapper/omarchy_root resume_offset=1914441` | Old hibernate wiring; firmware refuses S4, so it is currently unused | [10](10-dead-ends.md) |
 | `initramfs_async=0` | pre-existing; slows boot slightly. Origin not documented — **do not remove without knowing why it was added** | — |
 | `zswap.enabled=0` | zram is used instead | — |
 
-> `pcie_ports=compat` is the one to be most careful with. It is why the
-> Thunderbolt PCIe bridges have **no driver bound**, which in turn is why
-> hibernate hits D3cold problems — but changing it trades working USB-C for a
-> hibernate the firmware refuses anyway.
+The legacy `modprobe.blacklist=apple_ibridge,apple_ib_tb,apple_ib_als` argument
+is no longer part of the live command line. T1Bridge owns the current T1 stack.
 
 ---
 
@@ -100,40 +97,22 @@ Until 2026-09-07 there was **exactly one kernel installed**. Given that Wi-Fi,
 Touch Bar and trackpad all broke in driver-level ways that day, a second
 bootable kernel is real insurance.
 
-`linux-lts 6.18.46` is installed alongside `linux 7.1.9`.
+The live system currently uses `linux-lts` 6.18.49. Keep at least one known
+bootable fallback entry when updating kernels.
 
-### Confirmed 2026-09-07: all DKMS modules built for LTS
+### DKMS checks
 
-This was the uncertain part, and it succeeded completely:
-
-```
-appleibridge/0.1,        6.18.46-1-lts: installed
-snd_hda_macbookpro/0.1,  6.18.46-1-lts: installed (Original modules exist)
-linux-apfs-rw/0.3.21,    6.18.46-1-lts: installed
-
-/usr/lib/modules/6.18.46-1-lts/updates/dkms/
-  apfs.ko.zst  apple-ib-als.ko.zst  apple-ibridge.ko.zst
-  apple-ib-tb.ko.zst  snd-hda-codec-cs8409.ko.zst
-```
-
-A separate UKI was generated (`omarchy_linux-lts.efi`, 79 MB) and limine gained
-entry `[3] //linux-lts`. **`default_entry` still resolves to `[2] //linux`
-(7.1.9, `rootflags=subvol=@`)** — adding a kernel did not change what boots.
-
-> **⚠️ Modules building is still not the same as the machine working.**
-> Everything in [05](05-sleep-and-resume.md) is kernel-adjacent — the
-> `brcmfmac` D3 handshake, `applespi` resync, Touch Bar probe — and those
-> behaviours may differ under 6.18 in either direction.
->
-> **Boot it deliberately once**, at a time of your choosing, and check Wi-Fi,
-> sound, Touch Bar, trackpad and suspend. Do not discover the answer on the
-> night the primary kernel breaks.
+The audio codec and T1Bridge kernel components must be built for the kernel that
+actually boots. `dkms status` should list `snd_hda_macbookpro` and
+`t1bridge-dkms` components for `uname -r`. Building successfully does not prove
+suspend works; keep the suspend safety policy after kernel updates until it has
+been deliberately retested.
 
 Check which modules built:
 
 ```bash
-dkms status                                    # expect entries for both kernels
-ls /usr/lib/modules/*-lts/updates/dkms/        # apfs, apple-ib*, snd-hda-codec-cs8409
+dkms status
+find "/usr/lib/modules/$(uname -r)/updates/dkms" -maxdepth 1 -type f
 ```
 
 ---

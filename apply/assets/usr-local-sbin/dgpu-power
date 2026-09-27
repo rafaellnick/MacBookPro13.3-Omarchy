@@ -5,11 +5,10 @@
 #   on       restore it
 #   status   report
 #
-# Measured at the battery terminals, idle desktop, backlight 74%:
-#   AMD drives panel, dpm=low          19.04 W   (the old baseline)
-#   Intel drives panel, AMD awake      21.23 W   (worse - AMD cannot sleep)
-#   Intel drives panel, AMD off        15.25 W   D3hot
-#   ... same, after one suspend cycle  13.29 W   D3cold   -5.75 W / -30%
+# Current quiet-desktop measurements settle around 9-10 W with Intel driving
+# the panel and the Radeon off. Active workloads and the first seconds after
+# login are higher. Never use suspend as a way to chase a lower D-state: resume
+# is unsafe on this stack and has produced 20 W draw.
 #
 # Polaris 11 in a gmux Mac has NO ATPX and NO _PR3, so amdgpu logs
 # "Runtime PM not available" and the card can never runtime-suspend on its own.

@@ -1,0 +1,272 @@
+#!/usr/bin/bash
+# Battery-only Thunderbolt power policy for MacBookPro13,3.
+#
+# The two Alpine Ridge host routers cannot runtime-suspend while their NHI
+# drivers are bound.  With no device attached, unbinding only the NHI lets the
+# entire PCIe fabric suspend; the sibling xHCI controller remains bound.
+set -uo pipefail
+shopt -s nullglob
+
+readonly runtime_dir=/run/macbook-thunderbolt-power
+readonly lock_file=$runtime_dir/lock
+readonly keep_awake_file=$runtime_dir/keep-awake
+readonly sleeping_file=$runtime_dir/sleeping
+readonly pm_async_file=$runtime_dir/pm-async-before-sleep
+readonly poll_seconds=10
+
+readonly -a nhi_devices=(0000:06:00.0 0000:7c:00.0)
+readonly -a xhci_devices=(0000:07:00.0 0000:7d:00.0)
+readonly -a usb_bus_pairs=('3 4' '5 6')
+readonly -a thunderbolt_domains=(0 1)
+
+mkdir -p "$runtime_dir"
+exec 9>"$lock_file"
+
+log() {
+    /usr/bin/logger -t macbook-thunderbolt-power -- "$*"
+}
+
+driver_name() {
+    local device=$1 driver=/sys/bus/pci/devices/$1/driver
+    [[ -L $driver ]] || return 1
+    basename "$(readlink -f "$driver")"
+}
+
+on_battery() {
+    local adapter=0 status=Unknown
+    [[ -r /sys/class/power_supply/ADP1/online ]] &&
+        read -r adapter < /sys/class/power_supply/ADP1/online
+    [[ -r /sys/class/power_supply/BAT0/status ]] &&
+        read -r status < /sys/class/power_supply/BAT0/status
+    [[ $adapter == 0 && $status == Discharging ]]
+}
+
+controller_has_device() {
+    local index=$1 bus domain entry
+    local -a entries
+
+    for bus in ${usb_bus_pairs[$index]}; do
+        entries=(/sys/bus/usb/devices/"$bus"-[1-9]*)
+        for entry in "${entries[@]}"; do
+            [[ -e $entry ]] && return 0
+        done
+    done
+
+    domain=${thunderbolt_domains[$index]}
+    entries=(/sys/bus/thunderbolt/devices/"$domain"-[1-9]*)
+    for entry in "${entries[@]}"; do
+        [[ -e $entry ]] && return 0
+    done
+    return 1
+}
+
+bind_nhi() {
+    local bdf=$1 device=/sys/bus/pci/devices/$1 current attempt
+    [[ -d $device ]] || {
+        log "cannot bind missing NHI $bdf"
+        return 1
+    }
+
+    current=$(driver_name "$bdf" 2>/dev/null || true)
+    if [[ $current == thunderbolt ]]; then
+        printf '%s\n' auto > "$device/power/control" 2>/dev/null || true
+        return 0
+    fi
+    if [[ -n $current ]]; then
+        log "will not replace driver $current on NHI $bdf"
+        return 1
+    fi
+
+    printf '%s\n' on > "$device/power/control" || return 1
+    /usr/bin/modprobe thunderbolt || true
+    if ! printf '%s\n' "$bdf" > /sys/bus/pci/drivers/thunderbolt/bind; then
+        log "failed to request Thunderbolt bind for $bdf"
+        return 1
+    fi
+    /usr/bin/udevadm settle --timeout=10 || true
+    for ((attempt = 0; attempt < 100; attempt++)); do
+        [[ $(driver_name "$bdf" 2>/dev/null || true) == thunderbolt ]] && break
+        sleep 0.1
+    done
+    if [[ $(driver_name "$bdf" 2>/dev/null || true) != thunderbolt ]]; then
+        log "Thunderbolt NHI $bdf did not rebind"
+        return 1
+    fi
+    printf '%s\n' auto > "$device/power/control" 2>/dev/null || true
+    log "rebound Thunderbolt NHI $bdf"
+}
+
+suspend_nhi() {
+    local bdf=$1 device=/sys/bus/pci/devices/$1 current
+    [[ -d $device ]] || return 0
+    current=$(driver_name "$bdf" 2>/dev/null || true)
+
+    if [[ -z $current ]]; then
+        printf '%s\n' auto > "$device/power/control" 2>/dev/null || true
+        return 0
+    fi
+    if [[ $current != thunderbolt ]]; then
+        log "will not unbind unexpected driver $current from NHI $bdf"
+        return 1
+    fi
+
+    if ! printf '%s\n' "$bdf" > /sys/bus/pci/drivers/thunderbolt/unbind; then
+        log "failed to unbind Thunderbolt NHI $bdf"
+        return 1
+    fi
+    printf '%s\n' auto > "$device/power/control" || return 1
+    log "suspended unused Thunderbolt NHI $bdf"
+}
+
+restore_all() {
+    local bdf result=0
+    for bdf in "${nhi_devices[@]}"; do
+        bind_nhi "$bdf" || result=1
+    done
+    return "$result"
+}
+
+prepare_sleep_devices() {
+    local index bdf result=0
+
+    # The Alpine Ridge NHI drivers are the devices which failed in this
+    # machine's last resume (tb_cfg_read/tb_cfg_write after D3cold).  Keep an
+    # NHI bound only when a real USB-C/Thunderbolt device is attached; otherwise
+    # take it out of the system-suspend callback graph for the whole cycle.
+    for index in "${!nhi_devices[@]}"; do
+        bdf=${nhi_devices[$index]}
+        if controller_has_device "$index"; then
+            log "keeping NHI $bdf bound for sleep because a device is attached"
+            continue
+        fi
+        suspend_nhi "$bdf" || result=1
+    done
+    return "$result"
+}
+
+save_and_disable_async_suspend() {
+    local value=1
+    [[ -r /sys/power/pm_async ]] && read -r value < /sys/power/pm_async
+    printf '%s\n' "$value" > "$pm_async_file"
+    printf '0\n' > /sys/power/pm_async
+    log "disabled asynchronous device suspend for this sleep cycle"
+}
+
+restore_async_suspend() {
+    local value=1
+    if [[ -r $pm_async_file ]]; then
+        read -r value < "$pm_async_file"
+    fi
+    printf '%s\n' "$value" > /sys/power/pm_async 2>/dev/null || true
+    rm -f "$pm_async_file"
+    log "restored asynchronous device suspend to $value"
+}
+
+reconcile() {
+    local index bdf xhci xhci_driver result=0
+
+    if [[ -e $sleeping_file ]]; then
+        prepare_sleep_devices
+        return
+    fi
+    if [[ -e $keep_awake_file ]] || ! on_battery; then
+        restore_all
+        return
+    fi
+
+    for index in "${!nhi_devices[@]}"; do
+        bdf=${nhi_devices[$index]}
+        xhci=${xhci_devices[$index]}
+        xhci_driver=$(driver_name "$xhci" 2>/dev/null || true)
+        if [[ $xhci_driver != xhci_hcd ]]; then
+            log "keeping NHI $bdf awake because xHCI $xhci is not healthy"
+            bind_nhi "$bdf" || result=1
+        elif controller_has_device "$index"; then
+            bind_nhi "$bdf" || result=1
+        else
+            suspend_nhi "$bdf" || result=1
+        fi
+    done
+    return "$result"
+}
+
+run_locked() {
+    local result
+    /usr/bin/flock -x 9
+    "$@"
+    result=$?
+    /usr/bin/flock -u 9
+    return "$result"
+}
+
+show_status() {
+    local source=battery override=automatic index bdf state driver attached=no
+    on_battery || source=AC
+    [[ -e $keep_awake_file ]] && override=keep-awake
+    [[ -e $sleeping_file ]] && override=sleeping
+    printf 'source=%s policy=%s\n' "$source" "$override"
+    for index in "${!nhi_devices[@]}"; do
+        bdf=${nhi_devices[$index]}
+        driver=$(driver_name "$bdf" 2>/dev/null || printf 'unbound')
+        state=$(cat "/sys/bus/pci/devices/$bdf/power/runtime_status" 2>/dev/null || printf 'missing')
+        controller_has_device "$index" && attached=yes || attached=no
+        printf '%s driver=%s runtime=%s attached=%s\n' \
+            "$bdf" "$driver" "$state" "$attached"
+    done
+}
+
+monitor() {
+    local exit_requested=0 sleeper
+    request_exit() { exit_requested=1; }
+    restore_on_exit() {
+        /usr/bin/flock -x 9
+        restore_all || true
+        /usr/bin/flock -u 9
+    }
+    trap request_exit TERM INT
+    trap restore_on_exit EXIT
+
+    while (( ! exit_requested )); do
+        run_locked reconcile || true
+        sleep "$poll_seconds" &
+        sleeper=$!
+        wait "$sleeper" 2>/dev/null || true
+    done
+}
+
+case ${1:-status} in
+    monitor)
+        monitor
+        ;;
+    apply)
+        run_locked reconcile
+        ;;
+    restore)
+        run_locked restore_all
+        ;;
+    on)
+        : > "$keep_awake_file"
+        run_locked restore_all
+        ;;
+    auto)
+        rm -f "$keep_awake_file"
+        run_locked reconcile
+        ;;
+    prepare-sleep)
+        : > "$sleeping_file"
+        save_and_disable_async_suspend
+        run_locked prepare_sleep_devices
+        ;;
+    resume)
+        restore_async_suspend
+        rm -f "$sleeping_file"
+        run_locked reconcile
+        ;;
+    status)
+        run_locked show_status
+        ;;
+    *)
+        echo "Usage: $0 {monitor|apply|restore|on|auto|prepare-sleep|resume|status}" >&2
+        exit 2
+        ;;
+esac

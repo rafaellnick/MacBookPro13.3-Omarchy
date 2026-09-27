@@ -1,0 +1,73 @@
+#!/bin/bash
+# Remove the unused Radeon HDMI-audio PCI function while the Radeon is awake.
+# EFI restores it at reboot. The GPU itself remains bound so vga_switcheroo can
+# cut its rails after the graphical session reaches the known zero-holder state.
+set -euo pipefail
+
+GPU=0000:01:00.0
+AUDIO=0000:01:00.1
+GPU_PATH=/sys/bus/pci/devices/$GPU
+AUDIO_PATH=/sys/bus/pci/devices/$AUDIO
+STATE_DIR=/var/lib/radeon-audio-remove
+BREAKER=$STATE_DIR/attempt-incomplete
+
+die() {
+	printf 'radeon-audio-remove: %s\n' "$*" >&2
+	exit 1
+}
+
+assert_value() {
+	local path=$1 expected=$2 description=$3 actual
+	actual=$(cat "$path" 2>/dev/null || true)
+	[ "$actual" = "$expected" ] ||
+		die "$description is '${actual:-missing}', expected '$expected'"
+}
+
+driver_name() {
+	basename "$(readlink -f "$1/driver" 2>/dev/null)" 2>/dev/null || true
+}
+
+case "${1:-remove}" in
+remove)
+	[ "$(id -u)" -eq 0 ] || die "must run as root"
+	[ ! -e "$BREAKER" ] ||
+		die "previous attempt was incomplete ($(cat "$BREAKER")); refusing to retry"
+	assert_value /sys/class/dmi/id/product_name MacBookPro13,3 "machine model"
+	assert_value /sys/bus/pci/devices/0000:00:02.0/boot_vga 1 "Intel boot_vga"
+	[ "$(driver_name /sys/bus/pci/devices/0000:00:02.0)" = i915 ] ||
+		die "Intel GPU is not bound to i915"
+	[ -e "$GPU_PATH" ] || die "Radeon GPU is absent"
+	[ -e "$AUDIO_PATH" ] || { echo "Radeon HDMI audio is already absent"; exit 0; }
+	assert_value "$GPU_PATH/vendor" 0x1002 "Radeon GPU vendor"
+	assert_value "$GPU_PATH/device" 0x67ef "Radeon GPU device"
+	assert_value "$GPU_PATH/power_state" D0 "Radeon GPU power state"
+	[ "$(driver_name "$GPU_PATH")" = amdgpu ] || die "Radeon GPU is not bound to amdgpu"
+	assert_value "$AUDIO_PATH/vendor" 0x1002 "Radeon audio vendor"
+	assert_value "$AUDIO_PATH/device" 0xaae0 "Radeon audio device"
+	[ "$(driver_name "$AUDIO_PATH")" = snd_hda_intel ] ||
+		die "Radeon audio is not bound to snd_hda_intel"
+	[ -w /sys/bus/pci/drivers/snd_hda_intel/unbind ] || die "audio unbind is unavailable"
+	[ -w "$AUDIO_PATH/remove" ] || die "audio remove is unavailable"
+	mkdir -p "$STATE_DIR"
+	printf '%s unbind\n' "$(date -Is)" > "$BREAKER"
+	sync "$BREAKER"
+	printf '%s' "$AUDIO" > /sys/bus/pci/drivers/snd_hda_intel/unbind
+	printf '%s remove\n' "$(date -Is)" > "$BREAKER"
+	sync "$BREAKER"
+	printf '1' > "$AUDIO_PATH/remove"
+	[ ! -e "$AUDIO_PATH" ] || die "Radeon audio is still present"
+	rm -f "$BREAKER"
+	echo "Radeon HDMI-audio function removed until reboot"
+	;;
+status)
+	if [ -e "$AUDIO_PATH" ]; then
+		printf '%s present driver=%s state=%s\n' "$AUDIO" \
+			"$(driver_name "$AUDIO_PATH")" \
+			"$(cat "$AUDIO_PATH/power_state" 2>/dev/null || echo unknown)"
+	else
+		echo "$AUDIO absent"
+	fi
+	[ -e "$BREAKER" ] && printf 'circuit breaker: %s\n' "$(cat "$BREAKER")"
+	;;
+*) die "usage: $0 {remove|status}" ;;
+esac

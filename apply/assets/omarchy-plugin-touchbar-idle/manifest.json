@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "local.touchbar-idle",
+  "name": "Touch Bar Idle Blanking",
+  "version": "1.0.0",
+  "author": "Local",
+  "description": "Publishes a short Wayland idle state for T1Bridge Touch Bar blanking.",
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}

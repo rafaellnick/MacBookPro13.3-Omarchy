@@ -1,0 +1,28 @@
+diff --git a/crates/t1-touchbar-hw/src/service.rs b/crates/t1-touchbar-hw/src/service.rs
+index 7ae7689..0f62d15 100644
+--- a/crates/t1-touchbar-hw/src/service.rs
++++ b/crates/t1-touchbar-hw/src/service.rs
+@@ -36 +36 @@ const INPUT_WAIT_MS: u32 = 10;
+-const SESSION_REVALIDATE_INTERVAL: Duration = Duration::from_millis(50);
++const SESSION_REVALIDATE_INTERVAL: Duration = Duration::from_millis(250);
+diff --git a/crates/t1-touchbar/src/builtin_renderer.rs b/crates/t1-touchbar/src/builtin_renderer.rs
+index 90cead9..c726fbe 100644
+--- a/crates/t1-touchbar/src/builtin_renderer.rs
++++ b/crates/t1-touchbar/src/builtin_renderer.rs
+@@ -35,0 +36,2 @@ const RECEIVE_RETRY_DELAY: Duration = Duration::from_millis(5);
++const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(20);
++const DISPLAY_OFF_POLL_INTERVAL: Duration = Duration::from_millis(250);
+@@ -128 +130,5 @@ fn run_once(provider: Option<&DesktopProvider>) -> Result<(), BuiltinRendererErr
+-            thread::sleep(RECEIVE_RETRY_DELAY);
++            thread::sleep(if session.display_off {
++                DISPLAY_OFF_POLL_INTERVAL
++            } else {
++                ACTIVE_POLL_INTERVAL
++            });
+diff --git a/crates/t1-touchbar/src/desktop_provider.rs b/crates/t1-touchbar/src/desktop_provider.rs
+index 315fce7..603485c 100644
+--- a/crates/t1-touchbar/src/desktop_provider.rs
++++ b/crates/t1-touchbar/src/desktop_provider.rs
+@@ -27 +27 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(1);
+-const WAIT_INTERVAL: Duration = Duration::from_millis(5);
++const WAIT_INTERVAL: Duration = Duration::from_millis(20);

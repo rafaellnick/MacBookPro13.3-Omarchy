@@ -1,0 +1,64 @@
+#!/bin/bash
+# Run the packaged T1 brightness policy at a battery-friendly cadence.
+set -euo pipefail
+
+readonly policy=/usr/lib/t1bridge-omarchy/auto-brightness
+readonly interval=${T1BRIDGE_AUTO_BRIGHTNESS_INTERVAL:-5}
+readonly battery_cap_percent=${T1BRIDGE_BATTERY_BRIGHTNESS_CAP:-30}
+
+[[ -r $policy ]] || { echo "Missing packaged T1 brightness policy: $policy" >&2; exit 1; }
+[[ $interval =~ ^[1-9][0-9]*([.][0-9]+)?$ ]] || {
+  echo "Invalid T1Bridge brightness interval: $interval" >&2
+  exit 2
+}
+[[ $battery_cap_percent =~ ^[0-9]+$ ]] &&
+  (( battery_cap_percent >= 10 && battery_cap_percent <= 100 )) || {
+  echo "Invalid battery brightness cap: $battery_cap_percent" >&2
+  exit 2
+}
+
+# The packaged policy uses one-second sleeps only for its steady-state loop.
+# Override those sleeps while continuing to source all policy and safety checks
+# from the installed package.
+source "$policy"
+
+# Preserve the packaged light-response curve, then put a ceiling on its result
+# while discharging. Ambient light can still dim the panel below the ceiling,
+# and AC operation retains the package's full brightness range.
+eval "$(declare -f brightness_step | sed '1s/^brightness_step /packaged_brightness_step /')"
+brightness_step() {
+  local target maximum=$5 status cap
+  target=$(packaged_brightness_step "$@") || return
+  if IFS= read -r status < /sys/class/power_supply/BAT0/status &&
+      [[ $status == Discharging ]]; then
+    cap=$(( maximum * battery_cap_percent / 100 ))
+    (( cap >= 1 )) || cap=1
+    (( target <= cap )) || target=$cap
+  fi
+  printf '%s\n' "$target"
+}
+
+cap_panel_on_battery() {
+  local status device maximum current cap
+  IFS= read -r status < /sys/class/power_supply/BAT0/status || return 0
+  [[ $status == Discharging ]] || return 0
+  device=$(panel_backlight) || return 0
+  maximum=$(command brightnessctl --class=backlight --device="$device" max) || return 0
+  current=$(command brightnessctl --class=backlight --device="$device" get) || return 0
+  [[ $maximum =~ ^[0-9]+$ && $current =~ ^[0-9]+$ ]] || return 0
+  cap=$(( maximum * battery_cap_percent / 100 ))
+  (( cap >= 1 )) || cap=1
+  (( current <= cap )) ||
+    command brightnessctl --quiet --class=backlight --device="$device" set "$cap"
+}
+
+sleep() {
+  if (( $# == 1 )) && [[ $1 == 1 ]]; then
+    command sleep "$interval"
+  else
+    command sleep "$@"
+  fi
+}
+
+cap_panel_on_battery
+run_brightness "$@"

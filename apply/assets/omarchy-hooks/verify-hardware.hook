@@ -1,60 +1,35 @@
 #!/bin/bash
-# post-boot hook: verify the out-of-tree drivers this MacBookPro13,3 depends on
-# are actually present for the RUNNING kernel.
-#
-# Three DKMS modules carry hardware this machine cannot do without:
-#   snd_hda_macbookpro  -> all sound (CS8409/CS42L83 codec)
-#   appleibridge        -> Touch Bar
-#   linux-apfs-rw       -> reading the macOS partition
-#
-# The failure this exists to catch: a kernel update rebuilds DKMS from a pacman
-# PostTransaction hook, and snd_hda_macbookpro's build step re-downloads ~150MB
-# of kernel source from kernel.org. With no network at update time that build
-# fails, the error scrolls past in the pacman output, and the already-built .ko
-# for the OLD kernel keeps working until you reboot. You then boot the new
-# kernel with no sound and nothing obvious to point at. Same shape of risk for
-# the Touch Bar.
-#
-# Silent when healthy, so it stays worth reading when it does speak.
+# Post-boot health check. Silent when healthy; one persistent notification on
+# regressions that materially affect this machine.
 
 set -uo pipefail
 
-KREL=$(uname -r)
-STATE="$HOME/.local/state/omarchy/last-verified-kernel"
 problems=()
+KREL=$(uname -r)
 
-# 1. DKMS modules built for THIS kernel, not merely present for some kernel.
 if command -v dkms >/dev/null 2>&1; then
-	status=$(dkms status 2>/dev/null)
-	for mod in snd_hda_macbookpro appleibridge linux-apfs-rw; do
-		grep -q "^${mod}/.*, ${KREL}, .*: installed" <<<"$status" \
-			|| problems+=("DKMS ${mod}: not installed for ${KREL}")
-	done
+	dkms_status=$(dkms status 2>/dev/null || true)
+	grep -q "^snd_hda_macbookpro/.*, $KREL, .*: installed" <<< "$dkms_status" \
+		|| problems+=("Audio DKMS is missing for $KREL")
 fi
+aplay -l 2>/dev/null | grep -qi CS8409 \
+	|| problems+=("CS8409/CS42L83 audio codec is not bound")
+systemctl is-active --quiet t1-touchbar-hw.service \
+	|| problems+=("T1Bridge hardware service is not active")
+systemctl --user is-active --quiet t1-touchbar.service \
+	|| problems+=("T1Bridge renderer is not active")
+grep -q '^brcmfmac ' /proc/modules \
+	|| problems+=("Broadcom Wi-Fi driver is not loaded")
 
-# 2. Audio codec actually bound - the module can build and still not attach.
-if command -v aplay >/dev/null 2>&1; then
-	aplay -l 2>/dev/null | grep -qi "CS8409" \
-		|| problems+=("Audio: CS8409/CS42L83 not bound - no sound")
+if [[ -r /sys/kernel/debug/vgaswitcheroo/switch ]]; then
+	grep -q 'DIS:.*:Off:' /sys/kernel/debug/vgaswitcheroo/switch \
+		|| problems+=("Radeon dGPU is still powered")
 fi
-
-# 3. Touch Bar driver loaded.
-grep -q '^apple_ib_tb ' /proc/modules || problems+=("Touch Bar: apple_ib_tb not loaded")
-
-# 4. Wi-Fi driver loaded. It is unloaded across every sleep by
-#    /usr/lib/systemd/system-sleep/brcmfmac-reload and has to come back.
-grep -q '^brcmfmac ' /proc/modules || problems+=("Wi-Fi: brcmfmac not loaded")
-
-prev=$(cat "$STATE" 2>/dev/null || echo "")
-mkdir -p "$(dirname "$STATE")" 2>/dev/null && printf '%s\n' "$KREL" >"$STATE"
+[[ ! -e /sys/bus/pci/devices/0000:01:00.1 ]] \
+	|| problems+=("unused Radeon HDMI-audio function is still present")
 
 ((${#problems[@]})) || exit 0
-
-context="Kernel ${KREL}"
-[ -n "$prev" ] && [ "$prev" != "$KREL" ] && context="After kernel update ${prev} → ${KREL}"
-
 body=$(printf '%s\n' "${problems[@]}")
-logger -t verify-hardware "FAIL: ${context}: ${problems[*]}"
-
-omarchy-notification-send -g 󰀪 -u critical "Hardware check failed" \
-	"${context}"$'\n'"${body}"$'\n'"Run mbp133-t1-check for detail" -t 0 >/dev/null 2>&1 || true
+logger -t verify-hardware "FAIL: ${problems[*]}"
+omarchy-notification-send -g 󰀪 -u critical 'MacBook hardware check failed' \
+	"$body" -t 0 >/dev/null 2>&1 || true

@@ -1,0 +1,4 @@
+# The graphical-session user unit has no terminal. Grant only the guarded
+# power-off operation; dgpu-power validates model state, panel ownership,
+# device holders and its persistent circuit breaker before writing switcheroo.
+%wheel ALL=(root) NOPASSWD: /usr/local/sbin/dgpu-power off
