@@ -54,3 +54,18 @@ the unused Radeon card. See [04-display-and-gpu.md](04-display-and-gpu.md).
 
 The apply script installs these plugins and scripts, then edits `shell.json`
 as JSON to preserve the rest of the user's layout.
+
+## Hyprland update and bar warnings
+
+After the Hyprland 0.56.2-2 update, `hyprpm reload` reported `hyprbars` loaded
+even though Hyprland rejected it with a version mismatch. `hyprpm update -f`
+rebuilt the plugin; `hyprctl plugin list` then confirmed `hyprbars` loaded and
+`hyprctl configerrors` remained empty after a compositor reload. Check the
+compositor state after future Hyprland updates rather than trusting the plugin
+manager's success message alone.
+
+The Omarchy shell also logs `Cannot assign to read-only property "moduleName"`
+for inline command widgets. This is a known package-side issue with widgets
+such as `fan` and `power-draw`; both continue to display and update. Keep the
+user widgets in place and allow the packaged Omarchy fix to arrive through
+normal updates.

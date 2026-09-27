@@ -4,6 +4,33 @@ The regulatory configuration is corrected. Earlier attempts also reloaded the
 driver around suspend, but those hooks have been removed because suspend itself
 is currently blocked; see [05-sleep-and-resume.md](05-sleep-and-resume.md).
 
+## Current signal investigation (2026-09-27)
+
+The active 5 GHz access point reads approximately −62 to −65 dBm, about 60–69%
+in NetworkManager. Omarchy displays this as one icon level below full. Router
+pings had no packet loss and receive rates reached 180 Mbit/s, so the icon is
+reflecting medium received signal rather than a broken connection.
+
+The profile explicitly enables Wi-Fi power save, and TLP enables it on battery.
+Two short A/B trials found that disabling it reduced the largest router ping
+from 35/107 ms to about 4.5 ms, but RSSI stayed within the same ±2 dB range.
+Power save remains enabled to preserve the battery configuration. If latency
+or dropped frames become the actual problem, disable it in both the connection
+and TLP and remeasure battery draw; doing so cannot improve the bar's RSSI icon.
+
+The kernel's missing Apple-specific `.bin`, CLM and TX-capability messages are
+nonfatal firmware fallbacks. The installed generic BCM43602 firmware brings up
+all expected 2.4 and 5 GHz channels. The NVRAM calibration file is already a
+generic board dump; importing another board's radio files or raising its SAR
+limits would be unsafe and has no measured benefit here.
+
+The boot warning `set-wireless-regdom failed with exit code 1` came from every
+entry in `/etc/conf.d/wireless-regdom` being commented out. Its helper expects
+one active country. Activating `WIRELESS_REGDOM="BR"` makes the helper succeed
+and matches this machine's existing NVRAM `ccode=BR` setting. `brcmfmac` still
+reports its self-managed phy domain as country 99; the global BR setting does
+not override that firmware domain.
+
 ---
 
 ## 3.1 Weak signal — restrictive regulatory domain

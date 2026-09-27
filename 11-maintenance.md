@@ -14,12 +14,19 @@ systemctl --failed
 systemctl status t1-touchbar-hw.service
 systemctl --user status t1-touchbar.service t1bridge-auto-brightness.service
 aplay -l | grep -E 'CS8409|CS42L83'
+hyprctl plugin list                         # hyprbars must really be loaded
+hyprctl configerrors                        # empty after a clean update
+sudo ./apply/verify-limine-hashes.py         # all generated EFI hashes match
 ```
 
 The low-wakeup T1Bridge patch is pinned to source commit
 `81cbdf81026a16e02f0bea74735c6b029a8ffae2`. A T1Bridge upgrade may change the
 source and service protocol. Rebase the patch and rerun upstream tests before
 rebuilding; do not assume a clean patch application proves runtime compatibility.
+
+If `hyprbars` disappears after a Hyprland update while `hyprpm reload` says it
+loaded, run `hyprpm update -f` and verify with `hyprctl plugin list`. The forced
+rebuild resolved a 0.56.2-2 ABI mismatch on this machine.
 
 ## After reboot
 

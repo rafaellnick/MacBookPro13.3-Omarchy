@@ -170,6 +170,21 @@ fi
 if wants wifi; then
 	head_ Wi-Fi
 	install_file "$ASSETS/modprobe/brcmfmac.conf" /etc/modprobe.d/brcmfmac.conf 644
+	REGDOM=/etc/conf.d/wireless-regdom
+	if [[ ! -f $REGDOM ]]; then
+		warn "$REGDOM is absent; wireless-regdb cannot set BR at boot"
+	elif awk '/^WIRELESS_REGDOM=/ && $0 != "WIRELESS_REGDOM=\"BR\"" { found=1 } END { exit !found }' "$REGDOM"; then
+		warn "$REGDOM has another active country; review before changing it"
+	elif grep -qx 'WIRELESS_REGDOM="BR"' "$REGDOM"; then
+		skip 'global wireless regulatory domain: BR'
+	elif ! grep -qx '#WIRELESS_REGDOM="BR"' "$REGDOM"; then
+		warn "$REGDOM lacks the BR entry; review its format before editing"
+	elif ((CHECK)); then
+		would "activate WIRELESS_REGDOM=BR in $REGDOM"
+	else
+		sed -i 's/^#WIRELESS_REGDOM="BR"$/WIRELESS_REGDOM="BR"/' "$REGDOM" \
+			&& ok 'global wireless regulatory domain: BR' || fail "edit $REGDOM"
+	fi
 	NVRAM=/lib/firmware/brcm/brcmfmac43602-pcie.txt
 	if [[ ! -e $NVRAM ]]; then
 		warn "$NVRAM is absent"

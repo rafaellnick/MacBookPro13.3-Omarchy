@@ -26,6 +26,8 @@ Phases are `packages`, `audio-dkms`, `touchbar`, `wifi`, `sleep`, `power`,
 - Passwordless sudo is limited to the guarded `dgpu-power off` command.
 - The Wi-Fi NVRAM file is patched in place so its machine-specific data is not
   overwritten.
+- The global wireless-regdb country is activated as BR in place; other active
+  country settings trigger a warning for manual review.
 - Shell integration uses user overrides and edits `shell.json` as JSON.
 - Lock-state integration patches an existing user clone of `omarchy.lock`; it
   warns and leaves the clone untouched if the Omarchy 4.0.4 patch no longer
@@ -60,3 +62,7 @@ does not run it implicitly.
 Run `sudo ./mbp133-apply.sh --check` after provisioning. Any `WOULD` line is a
 configuration difference; `not` lines in the final verification block describe
 runtime state and may require a login or reboot before they become true.
+
+`sudo ./verify-limine-hashes.py` checks every active and snapshot EFI digest in
+the generated Limine config. It reads files only and exits nonzero if a target
+is missing or its BLAKE2b digest is stale.

@@ -143,4 +143,24 @@ sudo snapper -c root list
 systemctl is-enabled snapper-timeline.timer               # enabled
 df -h /boot                                               # ESP has room for both UKIs
 pacman -Q linux linux-lts
+sudo ./apply/verify-limine-hashes.py                        # all active and snapshot EFI hashes
 ```
+
+## 8.6 BLAKE2b warning after kernel updates
+
+Limine paths contain a BLAKE2b digest after `#`. On 2026-09-27 the three active
+UKIs had been rebuilt while `/boot/limine.conf` still held older digests, so
+Limine warned and waited for a keypress. With `hash_mismatch_panic: no`, this
+was an integrity warning rather than a failed kernel load. Several historical
+snapshot paths had the same stale metadata.
+
+`limine-update` regenerated the active UKIs and entries. The snapshot manifest
+and generated snapshot lines were then reconciled against the files they
+actually reference. The final check covered 12 distinct EFI targets and found
+zero missing files or mismatches. The next boot has not yet been observed.
+
+If the warning returns after an update, run
+`sudo ./apply/verify-limine-hashes.py` before rebooting again. Preserve the
+current ESP files and snapshot manifest before any repair. The 2026-09-27
+recovery archive is at
+`~/mbp133-recovery/limine-20260927-172157/boot-recovery.tar`.
